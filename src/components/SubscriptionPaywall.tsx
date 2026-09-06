@@ -1,0 +1,142 @@
+import { Loader2, Lock, Sparkles } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import { useSystemSettings, useCreateCheckoutSession } from '@/hooks/useAdmin';
+import { hasAccess, formatPrice } from '@/types/admin';
+import toast from 'react-hot-toast';
+
+export default function SubscriptionPaywall() {
+  const { profile } = useAuth();
+  const { data: settings } = useSystemSettings();
+  const checkoutMutation = useCreateCheckoutSession();
+
+  // Admins should bypass the paywall
+  if (!profile || profile.role === 'admin' || hasAccess(profile)) return null;
+
+  const isExpired = profile.subscription_status === 'trialing' && !hasAccess(profile);
+  const isRevoked = profile.subscription_status === 'revoked';
+  const isCancelled = profile.subscription_status === 'cancelled';
+  const isPastDue = profile.subscription_status === 'past_due';
+
+  const title = isRevoked
+    ? 'Access Revoked'
+    : isCancelled
+      ? 'Subscription Cancelled'
+      : isPastDue
+        ? 'Payment Overdue'
+        : isExpired
+          ? 'Trial Expired'
+          : 'Upgrade Required';
+
+  const message = isRevoked
+    ? 'Your access has been revoked by an administrator. Please contact support.'
+    : isCancelled
+      ? 'Your subscription has been cancelled. Resubscribe to regain access.'
+      : isPastDue
+        ? 'Your last payment failed. Please update your payment method.'
+        : isExpired
+          ? 'Your free trial has ended. Subscribe to continue using PharmaFlow.'
+          : 'Subscribe to continue using PharmaFlow.';
+
+  const price = settings ? formatPrice(settings.subscription_price_cents) : '$29.00';
+
+  const handleSubscribe = async () => {
+    if (!settings) return;
+    try {
+      const { url } = await checkoutMutation.mutateAsync(settings.subscription_price_cents);
+      if (url) {
+        window.location.href = url;
+      } else {
+        toast.error('Failed to create checkout session');
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to start checkout';
+      toast.error(message);
+    }
+  };
+
+  const canSubscribe = !isRevoked;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-neutral-900/60 backdrop-blur-md animate-fade-in" />
+      <div className="relative w-full max-w-md animate-slide-up">
+        <div className="card overflow-hidden">
+          <div className="bg-gradient-to-br from-primary-50 to-secondary-50 px-6 py-8 text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary-600 shadow-elevated">
+              <Lock className="h-8 w-8 text-white" />
+            </div>
+            <h2 className="text-xl font-bold text-neutral-900">{title}</h2>
+            <p className="mt-2 text-sm text-neutral-500">{message}</p>
+          </div>
+
+          <div className="p-6">
+            {canSubscribe && (
+              <div className="rounded-xl border border-neutral-100 bg-neutral-50/50 p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-5 w-5 text-primary-600" />
+                    <span className="text-sm font-semibold text-neutral-800">PharmaFlow Pro</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-2xl font-bold text-neutral-900">{price}</span>
+                    <span className="text-sm text-neutral-400">/mo</span>
+                  </div>
+                </div>
+                <ul className="mt-4 space-y-2 text-sm text-neutral-600">
+                  <li className="flex items-center gap-2">
+                    <div className="h-1.5 w-1.5 rounded-full bg-success-500" />
+                    Unlimited inventory management
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <div className="h-1.5 w-1.5 rounded-full bg-success-500" />
+                    Prescription tracking & dispensing
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <div className="h-1.5 w-1.5 rounded-full bg-success-500" />
+                    Reconciliation cycles with file import
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <div className="h-1.5 w-1.5 rounded-full bg-success-500" />
+                    Transaction history & audit logs
+                  </li>
+                </ul>
+              </div>
+            )}
+
+            {canSubscribe && (
+              <button
+                onClick={handleSubscribe}
+                disabled={checkoutMutation.isPending || !settings}
+                className="btn-primary mt-4 w-full"
+              >
+                {checkoutMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+                {checkoutMutation.isPending ? 'Redirecting...' : `Subscribe for ${price}/mo`}
+              </button>
+            )}
+
+            {isRevoked && (
+              <p className="mt-4 text-center text-sm text-neutral-400">
+                Contact your administrator to restore access.
+              </p>
+            )}
+
+            {isExpired && profile.trial_ends_at && (
+              <p className="mt-3 text-center text-xs text-neutral-400">
+                Your trial ended on{' '}
+                {new Date(profile.trial_ends_at).toLocaleDateString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                })}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
