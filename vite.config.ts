@@ -5,6 +5,7 @@ import { fileURLToPath, URL } from 'node:url';
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  base: '/', // Set base path to root for proper deployment
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
@@ -12,5 +13,9 @@ export default defineConfig({
   },
   optimizeDeps: {
     exclude: ['lucide-react'],
+  },
+  build: {
+    outDir: 'dist',
+    sourcemap: true,
   },
 });
