@@ -14,10 +14,24 @@ const queryClient = new QueryClient({
   },
 });
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
-  </StrictMode>
-);
+console.log('Starting PharmaFlow app...');
+
+try {
+  const rootElement = document.getElementById('root');
+  if (!rootElement) {
+    console.error('Root element not found!');
+    document.body.innerHTML = '<div style="padding: 20px; color: red;">Error: Root element not found</div>';
+  } else {
+    console.log('Root element found, mounting React app...');
+    createRoot(rootElement).render(
+      <StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <App />
+        </QueryClientProvider>
+      </StrictMode>
+    );
+  }
+} catch (error) {
+  console.error('Error mounting React app:', error);
+  document.body.innerHTML = `<div style="padding: 20px; color: red;">Error: ${error}</div>`;
+}
