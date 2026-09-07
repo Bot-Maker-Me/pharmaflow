@@ -82,42 +82,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      console.log('Creating new profile for user:', session.user.id);
-      const trialEnds = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
-      console.log('Trial ends at:', trialEnds);
-
-      const { data: created, error: createError } = await supabase
-        .from('profiles')
-        .insert({
-          id: session.user.id,
-          email: session.user.email ?? null,
-          role: 'user',
-          subscription_status: 'trialing',
-          trial_ends_at: trialEnds,
-        })
-        .select()
-        .maybeSingle();
-
-      if (!mounted) return;
-
-      if (createError) {
-        console.error('Error creating profile:', createError);
-      } else {
-        console.log('Profile created:', created);
-      }
-
-      setProfile(
-        (created as Profile) ?? {
-          id: session.user.id,
-          email: session.user.email ?? null,
-          role: 'user',
-          stripe_customer_id: null,
-          subscription_status: 'trialing',
-          trial_ends_at: trialEnds,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }
-      );
+      // Profile creation failed - trigger should have handled this
+      console.error('Profile not found and trigger failed to create it');
       setLoading(false);
     })();
 
@@ -132,8 +98,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signUp = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) throw error;
+    console.log('Attempting to sign up:', email);
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: `${window.location.origin}/dashboard`
+      }
+    });
+    if (error) {
+      console.error('Signup error:', error);
+      throw error;
+    }
+    console.log('Signup successful:', data);
   };
 
   const signOut = async () => {
