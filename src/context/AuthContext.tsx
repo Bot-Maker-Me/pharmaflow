@@ -54,10 +54,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let mounted = true;
 
     (async () => {
+      console.log('Loading profile for user:', session.user.id);
+
       const { data, error } = await supabase.rpc('get_my_profile');
       if (!mounted) return;
 
       if (!error && data) {
+        console.log('Profile loaded from RPC:', data);
         setProfile(data as Profile);
         setLoading(false);
         return;
@@ -73,13 +76,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!mounted) return;
 
       if (existing) {
+        console.log('Profile loaded from table:', existing);
         setProfile(existing as Profile);
         setLoading(false);
         return;
       }
 
+      console.log('Creating new profile for user:', session.user.id);
       const trialEnds = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
-      const { data: created } = await supabase
+      console.log('Trial ends at:', trialEnds);
+
+      const { data: created, error: createError } = await supabase
         .from('profiles')
         .insert({
           id: session.user.id,
@@ -92,6 +99,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .maybeSingle();
 
       if (!mounted) return;
+
+      if (createError) {
+        console.error('Error creating profile:', createError);
+      } else {
+        console.log('Profile created:', created);
+      }
+
       setProfile(
         (created as Profile) ?? {
           id: session.user.id,
