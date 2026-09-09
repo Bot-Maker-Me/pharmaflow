@@ -9,7 +9,7 @@ interface AuthContextValue {
   profile: Profile | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string, pharmacyName?: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -97,13 +97,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   };
 
-  const signUp = async (email: string, password: string) => {
-    console.log('Attempting to sign up:', email);
+  const signUp = async (email: string, password: string, pharmacyName?: string) => {
+    console.log('Attempting to sign up:', email, 'pharmacy:', pharmacyName);
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        emailRedirectTo: `${window.location.origin}/`
+        emailRedirectTo: `${window.location.origin}/`,
+        data: {
+          pharmacy_name: pharmacyName || 'My Pharmacy'
+        }
       }
     });
     if (error) {
@@ -111,6 +114,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw error;
     }
     console.log('Signup successful:', data);
+
+    // Update profile with pharmacy name after signup
+    if (data.user && pharmacyName) {
+      try {
+        await supabase
+          .from('profiles')
+          .update({ pharmacy_name: pharmacyName })
+          .eq('id', data.user.id);
+      } catch (err) {
+        console.error('Error updating pharmacy name:', err);
+        // Don't throw error, signup was successful
+      }
+    }
   };
 
   const signOut = async () => {

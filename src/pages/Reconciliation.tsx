@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef, type DragEvent } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect, type DragEvent } from 'react';
 import {
   Scale,
   Upload,
@@ -113,6 +113,7 @@ export default function Reconciliation() {
 
   const [activeCycleId, setActiveCycleId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
 
   // New states for enhanced features
   const [searchQuery, setSearchQuery] = useState('');
@@ -129,6 +130,111 @@ export default function Reconciliation() {
   const updateMutation = useUpdateActualCount();
   const [locationEditIndex, setLocationEditIndex] = useState<number | null>(null);
   const { data: activeCycleItems } = useReconciliationItems(activeCycleId);
+
+  // Auto-save draft functionality
+  useEffect(() => {
+    const autoSaveDraft = async () => {
+      if (draftItems.length === 0 || !drugs) return;
+
+      // Only auto-save if we have meaningful data (files uploaded and processed)
+      if (mckessonFiles.length === 0 && krollFiles.length === 0) return;
+
+      try {
+        if (currentDraftId) {
+          // Update existing draft
+          const { error } = await supabase
+            .from('reconciliation_items')
+            .upsert(
+              draftItems.map(item => ({
+                cycle_id: currentDraftId,
+                user_id: (await supabase.auth.getUser()).data.user?.id,
+                drug_id: item.drug_id,
+                din: item.din,
+                description: item.description,
+                schedule: item.schedule,
+                opening_balance: item.opening_balance,
+                purchased_count: item.purchased_count,
+                dispensed_count: item.dispensed_count,
+                actual_count: item.actual_count,
+                flag: item.flag,
+                verify_note: item.verify_note,
+                locations: item.locations,
+              }))
+            );
+          
+          if (error) {
+            console.error('Auto-save draft error:', error);
+          }
+        } else {
+          // Create new draft cycle
+          const { data: userData } = await supabase.auth.getUser();
+          if (!userData.user) return;
+
+          const { data: newCycle, error: cycleError } = await supabase
+            .from('reconciliation_cycles')
+            .insert({
+              user_id: userData.user.id,
+              status: 'draft',
+              name: `Draft - ${new Date().toLocaleDateString()}`,
+              start_date: new Date().toISOString(),
+            })
+            .select()
+            .single();
+
+          if (cycleError) {
+            console.error('Error creating draft cycle:', cycleError);
+            return;
+          }
+
+          setCurrentDraftId(newCycle.id);
+
+          // Save items to the new draft
+          const { error: itemsError } = await supabase
+            .from('reconciliation_items')
+            .insert(
+              draftItems.map(item => ({
+                cycle_id: newCycle.id,
+                user_id: userData.user.id,
+                drug_id: item.drug_id,
+                din: item.din,
+                description: item.description,
+                schedule: item.schedule,
+                opening_balance: item.opening_balance,
+                purchased_count: item.purchased_count,
+                dispensed_count: item.dispensed_count,
+                actual_count: item.actual_count,
+                flag: item.flag,
+                verify_note: item.verify_note,
+                locations: item.locations,
+              }))
+            );
+
+          if (itemsError) {
+            console.error('Error saving draft items:', itemsError);
+          }
+        }
+      } catch (error) {
+        console.error('Auto-save error:', error);
+      }
+    };
+
+    // Auto-save every 30 seconds
+    const interval = setInterval(autoSaveDraft, 30000);
+    return () => clearInterval(interval);
+  }, [draftItems, mckessonFiles, krollFiles, currentDraftId, drugs]);
+
+  // Save draft on page unload
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (draftItems.length > 0 && (mckessonFiles.length > 0 || krollFiles.length > 0)) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [draftItems, mckessonFiles, krollFiles]);
 
   // History management
   const addToHistory = useCallback((items: ReconciliationItemDraft[]) => {
@@ -1856,6 +1962,7 @@ interface PastCyclesViewProps {
     verified_by: string | null;
     notes: string | null;
     created_at: string;
+    name: string | null;
   }[];
   loading: boolean;
   onViewCycle: (id: string) => void;
@@ -1864,11 +1971,14 @@ interface PastCyclesViewProps {
 }
 
 function PastCyclesView(props: PastCyclesViewProps) {
+  const draftCycles = props.cycles.filter(c => c.status === 'draft');
+  const otherCycles = props.cycles.filter(c => c.status !== 'draft');
+
   return (
     <div>
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-neutral-900">Past Cycles</h1>
+          <h1 className="text-2xl font-bold text-neutral-900">Reconciliation Cycles</h1>
           <p className="mt-1 text-sm text-neutral-500">View and manage reconciliation history</p>
         </div>
         <button className="btn-primary mt-4 sm:mt-0" onClick={props.onNewCycle}>
@@ -1892,58 +2002,119 @@ function PastCyclesView(props: PastCyclesViewProps) {
           </button>
         </div>
       ) : (
-        <div className="space-y-3">
-          {props.cycles.map((cycle) => {
-            const isCompleted = cycle.status === 'completed';
-            return (
-              <div key={cycle.id} className="card p-5 transition-all duration-200 hover:shadow-elevated">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className={`flex h-11 w-11 items-center justify-center rounded-lg ${isCompleted ? 'bg-success-50' : 'bg-warning-50'}`}>
-                      {isCompleted ? (
-                        <CheckCircle2 className="h-5 w-5 text-success-600" />
-                      ) : (
-                        <Scale className="h-5 w-5 text-warning-600" />
+        <div className="space-y-6">
+          {/* Pending Drafts Section */}
+          {draftCycles.length > 0 && (
+            <div>
+              <h2 className="mb-3 text-lg font-semibold text-neutral-800">
+                Pending Drafts ({draftCycles.length})
+              </h2>
+              <div className="space-y-3">
+                {draftCycles.map((cycle) => (
+                  <div key={cycle.id} className="card p-5 border-l-4 border-warning-400 transition-all duration-200 hover:shadow-elevated">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-warning-50">
+                          <Edit3 className="h-5 w-5 text-warning-600" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-semibold text-neutral-900">
+                              {cycle.name || `Draft - ${formatDate(cycle.created_at)}`}
+                            </p>
+                            <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-warning-50 text-warning-700">
+                              Draft
+                            </span>
+                          </div>
+                          <p className="mt-0.5 text-xs text-neutral-400">
+                            Created {formatDate(cycle.created_at)} · Continue working on this reconciliation
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button 
+                          className="btn-primary text-xs" 
+                          onClick={() => props.onViewCycle(cycle.id)}
+                        >
+                          Continue
+                        </button>
+                        <button
+                          className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-error-50 hover:text-error-600"
+                          onClick={() => props.onDeleteCycle(cycle.id)}
+                          title="Delete draft"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Completed and In-Progress Cycles */}
+          {otherCycles.length > 0 && (
+            <div>
+              <h2 className="mb-3 text-lg font-semibold text-neutral-800">
+                {draftCycles.length > 0 ? 'Completed Cycles' : 'All Cycles'}
+              </h2>
+              <div className="space-y-3">
+                {otherCycles.map((cycle) => {
+                  const isCompleted = cycle.status === 'completed';
+                  return (
+                    <div key={cycle.id} className="card p-5 transition-all duration-200 hover:shadow-elevated">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className={`flex h-11 w-11 items-center justify-center rounded-lg ${isCompleted ? 'bg-success-50' : 'bg-warning-50'}`}>
+                            {isCompleted ? (
+                              <CheckCircle2 className="h-5 w-5 text-success-600" />
+                            ) : (
+                              <Scale className="h-5 w-5 text-warning-600" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-semibold text-neutral-900">
+                                {cycle.start_date ? formatDate(cycle.start_date) : formatDate(cycle.created_at)}
+                                {cycle.end_date ? ` — ${formatDate(cycle.end_date)}` : ''}
+                              </p>
+                              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${isCompleted ? 'bg-success-50 text-success-700' : 'bg-warning-50 text-warning-700'}`}>
+                                {isCompleted ? 'Completed' : 'In Progress'}
+                              </span>
+                            </div>
+                            <p className="mt-0.5 text-xs text-neutral-400">
+                              {cycle.performed_by && `Performed by ${cycle.performed_by}`}
+                              {cycle.performed_by && cycle.verified_by && ' · '}
+                              {cycle.verified_by && `Verified by ${cycle.verified_by}`}
+                              {!cycle.performed_by && !cycle.verified_by && 'No performer/verifier assigned'}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button className="btn-secondary text-xs" onClick={() => props.onViewCycle(cycle.id)}>
+                            {isCompleted ? 'View' : 'Continue'}
+                          </button>
+                          <button
+                            className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-error-50 hover:text-error-600"
+                            onClick={() => props.onDeleteCycle(cycle.id)}
+                            title="Delete cycle"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                      {cycle.notes && (
+                        <p className="mt-3 text-xs text-neutral-400">{cycle.notes}</p>
                       )}
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold text-neutral-900">
-                          {cycle.start_date ? formatDate(cycle.start_date) : formatDate(cycle.created_at)}
-                          {cycle.end_date ? ` — ${formatDate(cycle.end_date)}` : ''}
-                        </p>
-                        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${isCompleted ? 'bg-success-50 text-success-700' : 'bg-warning-50 text-warning-700'}`}>
-                          {isCompleted ? 'Completed' : 'In Progress'}
-                        </span>
-                      </div>
-                      <p className="mt-0.5 text-xs text-neutral-400">
-                        {cycle.performed_by && `Performed by ${cycle.performed_by}`}
-                        {cycle.performed_by && cycle.verified_by && ' · '}
-                        {cycle.verified_by && `Verified by ${cycle.verified_by}`}
-                        {!cycle.performed_by && !cycle.verified_by && 'No performer/verifier assigned'}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button className="btn-secondary text-xs" onClick={() => props.onViewCycle(cycle.id)}>
-                      {isCompleted ? 'View' : 'Continue'}
-                    </button>
-                    <button
-                      className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-error-50 hover:text-error-600"
-                      onClick={() => props.onDeleteCycle(cycle.id)}
-                      title="Delete cycle"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-                {cycle.notes && (
-                  <p className="mt-3 text-xs text-neutral-400">{cycle.notes}</p>
-                )}
+                  );
+                })}
               </div>
-            );
-          })}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Pill, Mail, Lock, Loader2, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { Pill, Mail, Lock, Loader2, ArrowRight, CheckCircle2, Building2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/context/AuthContext';
@@ -13,22 +13,26 @@ export default function Signup() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [pharmacyName, setPharmacyName] = useState('');
   const [errors, setErrors] = useState<{
     email?: string;
     password?: string;
     confirmPassword?: string;
+    pharmacyName?: string;
   }>({});
   const [submitting, setSubmitting] = useState(false);
   const [step, setStep] = useState<'form' | 'success'>('form');
 
   const validate = () => {
-    const next: { email?: string; password?: string; confirmPassword?: string } = {};
+    const next: { email?: string; password?: string; confirmPassword?: string; pharmacyName?: string } = {};
     if (!email) next.email = 'Email is required';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) next.email = 'Enter a valid email address';
     if (!password) next.password = 'Password is required';
     else if (password.length < 6) next.password = 'Password must be at least 6 characters';
     if (!confirmPassword) next.confirmPassword = 'Please confirm your password';
     else if (password !== confirmPassword) next.confirmPassword = 'Passwords do not match';
+    if (!pharmacyName) next.pharmacyName = 'Pharmacy name is required';
+    else if (pharmacyName.length < 2) next.pharmacyName = 'Pharmacy name must be at least 2 characters';
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -38,7 +42,7 @@ export default function Signup() {
     if (!validate()) return;
     setSubmitting(true);
     try {
-      await signUp(email, password);
+      await signUp(email, password, pharmacyName);
       toast.success('Account created! Starting your free trial...');
       setStep('success');
       // Redirect to dashboard after a short delay
@@ -133,6 +137,25 @@ export default function Signup() {
                 />
               </div>
               {errors.email && <p className="mt-1 text-xs text-error-600">{errors.email}</p>}
+            </div>
+
+            <div>
+              <label htmlFor="pharmacyName" className="mb-1.5 block text-sm font-medium text-neutral-700">
+                Pharmacy name
+              </label>
+              <div className="relative">
+                <Building2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+                <input
+                  id="pharmacyName"
+                  type="text"
+                  value={pharmacyName}
+                  onChange={(e) => setPharmacyName(e.target.value)}
+                  placeholder="e.g., Main Street Pharmacy"
+                  className="input-field pl-10"
+                  autoComplete="organization"
+                />
+              </div>
+              {errors.pharmacyName && <p className="mt-1 text-xs text-error-600">{errors.pharmacyName}</p>}
             </div>
 
             <div>

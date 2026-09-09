@@ -151,6 +151,9 @@ export default function Layout() {
 
           <div className="hidden sm:block">
             <p className="text-sm font-medium text-neutral-800">
+              Welcome back, {profile?.pharmacy_name || 'Pharmacist'} 👋
+            </p>
+            <p className="text-xs text-neutral-400">
               {new Date().toLocaleDateString('en-US', {
                 weekday: 'long',
                 month: 'long',

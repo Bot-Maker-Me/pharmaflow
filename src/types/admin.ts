@@ -8,6 +8,7 @@ export interface Profile {
   stripe_customer_id: string | null;
   subscription_status: SubscriptionStatus;
   trial_ends_at: string | null;
+  pharmacy_name: string | null;
   created_at: string;
   updated_at: string;
 }

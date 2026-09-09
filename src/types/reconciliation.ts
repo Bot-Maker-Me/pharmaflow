@@ -9,7 +9,7 @@ export const DEFAULT_COUNT_LOCATIONS: CountLocation[] = [
   { name: 'Med pouches', count: null },
 ];
 
-export type ReconciliationStatus = 'in_progress' | 'completed';
+export type ReconciliationStatus = 'draft' | 'in_progress' | 'completed';
 export type ReconciliationFlag = 'OK' | 'Pending count' | 'Review' | 'Verify';
 
 export interface ReconChecklist {
