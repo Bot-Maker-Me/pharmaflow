@@ -131,7 +131,7 @@ export default function Reconciliation() {
   const [locationEditIndex, setLocationEditIndex] = useState<number | null>(null);
   const { data: activeCycleItems } = useReconciliationItems(activeCycleId);
 
-  // Auto-save draft functionality
+  // Auto-save draft functionality - Fixed async/await issue
   useEffect(() => {
     const autoSaveDraft = async () => {
       if (draftItems.length === 0 || !drugs) return;
