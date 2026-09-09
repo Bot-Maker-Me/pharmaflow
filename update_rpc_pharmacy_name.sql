@@ -1,5 +1,8 @@
 -- Update get_my_profile RPC to include pharmacy_name
 
+-- Drop the existing function first
+DROP FUNCTION IF EXISTS get_my_profile();
+
 CREATE OR REPLACE FUNCTION get_my_profile()
 RETURNS TABLE (
   id uuid,
@@ -31,3 +34,5 @@ BEGIN
   WHERE p.id = auth.uid();
 END;
 $$;
+
+GRANT EXECUTE ON FUNCTION get_my_profile() TO authenticated;
