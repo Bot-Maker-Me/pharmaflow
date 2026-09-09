@@ -140,6 +140,9 @@ export default function Reconciliation() {
       if (mckessonFiles.length === 0 && krollFiles.length === 0) return;
 
       try {
+        const { data: userData } = await supabase.auth.getUser();
+        if (!userData.user) return;
+
         if (currentDraftId) {
           // Update existing draft
           const { error } = await supabase
@@ -147,7 +150,7 @@ export default function Reconciliation() {
             .upsert(
               draftItems.map(item => ({
                 cycle_id: currentDraftId,
-                user_id: (await supabase.auth.getUser()).data.user?.id,
+                user_id: userData.user.id,
                 drug_id: item.drug_id,
                 din: item.din,
                 description: item.description,
@@ -161,15 +164,12 @@ export default function Reconciliation() {
                 locations: item.locations,
               }))
             );
-          
+
           if (error) {
             console.error('Auto-save draft error:', error);
           }
         } else {
           // Create new draft cycle
-          const { data: userData } = await supabase.auth.getUser();
-          if (!userData.user) return;
-
           const { data: newCycle, error: cycleError } = await supabase
             .from('reconciliation_cycles')
             .insert({
