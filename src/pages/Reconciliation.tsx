@@ -468,7 +468,14 @@ export default function Reconciliation() {
         console.log(`Row data - DIN: ${din}, Actual: ${actualCount}, Full row:`, row);
         
         if (din && actualCount) {
-          const normalizedDin = din.toString().trim();
+          // Normalize DIN to handle leading zeros and formatting
+          let normalizedDin = din.toString().trim();
+          
+          // Pad to 8 digits if it's a shorter DIN
+          if (normalizedDin.length < 8 && /^\d+$/.test(normalizedDin)) {
+            normalizedDin = normalizedDin.padStart(8, '0');
+          }
+          
           const count = parseInt(actualCount.toString().trim(), 10);
           
           if (!isNaN(count) && count > 0) {
@@ -650,9 +657,31 @@ export default function Reconciliation() {
         // Also log the merged data DINs to see if they match
         console.log('Merged data DINs:', Array.from(merged.keys()));
         
-        for (const [din, count] of savedCounts) {
-          console.log(`Setting opening balance for DIN ${din}: ${count}`);
-          openingBalances.set(din, count);
+        // Try to match DINs with different normalization
+        for (const [savedDin, count] of savedCounts) {
+          // Try exact match first
+          if (merged.has(savedDin)) {
+            console.log(`Exact match found for DIN ${savedDin}: ${count}`);
+            openingBalances.set(savedDin, count);
+          } else {
+            // Try with leading zeros variations
+            let found = false;
+            for (const [mergedDin] of merged.keys()) {
+              // Remove leading zeros for comparison
+              const savedDinNoLeading = savedDin.replace(/^0+/, '');
+              const mergedDinNoLeading = mergedDin.replace(/^0+/, '');
+              
+              if (savedDinNoLeading === mergedDinNoLeading) {
+                console.log(`Match found for DIN ${savedDin} -> ${mergedDin}: ${count}`);
+                openingBalances.set(mergedDin, count);
+                found = true;
+                break;
+              }
+            }
+            if (!found) {
+              console.log(`No match found for saved DIN ${savedDin}`);
+            }
+          }
         }
         console.log('Opening balances after applying saved counts:', openingBalances);
       }
