@@ -451,13 +451,18 @@ export default function Reconciliation() {
     try {
       const parsedData = await parseSingleFile(savedCountFile, 'mckesson');
       const counts = new Map<string, number>();
-      
-      // Assuming the file has DIN and actual_count columns
+
+      // For saved count files, try to find the actual count
+      // Check both dispensed and purchased fields, use whichever has a value
       for (const [din, itemData] of parsedData) {
-        // Use purchased field as actual count for saved counts
-        counts.set(din, itemData.purchased);
+        // Use dispensed if it has a value, otherwise use purchased
+        // This handles different saved count file formats
+        const actualCount = itemData.dispensed > 0 ? itemData.dispensed : itemData.purchased;
+        if (actualCount > 0) {
+          counts.set(din, actualCount);
+        }
       }
-      
+
       setSavedCounts(counts);
       toast.success(`Loaded ${counts.size} saved counts from file`);
     } catch (err) {
