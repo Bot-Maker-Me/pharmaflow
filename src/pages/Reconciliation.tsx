@@ -435,6 +435,8 @@ export default function Reconciliation() {
       }
       setSavedCountFile(file);
       setSavedCountDragOver(false);
+      // Automatically parse the file when dropped
+      handleParseSavedCountFile();
     },
     []
   );
@@ -443,6 +445,8 @@ export default function Reconciliation() {
     const file = e.target.files?.[0];
     if (!file) return;
     setSavedCountFile(file);
+    // Automatically parse the file when selected
+    handleParseSavedCountFile();
   };
 
   const handleParseSavedCountFile = async () => {
@@ -1199,13 +1203,7 @@ function LandingView(props: LandingViewProps) {
               onFileSelect={props.onSavedCountSelect}
               onClear={() => {}}
             />
-            <button
-              onClick={props.onParseSavedCount}
-              disabled={!props.savedCountFile}
-              className="mt-2 btn-secondary w-full"
-            >
-              Parse Saved Count File
-            </button>
+            {/* Parse automatically when file is selected - no manual button needed */}
           </div>
         )}
       </div>
