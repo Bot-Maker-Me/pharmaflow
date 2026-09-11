@@ -458,11 +458,14 @@ export default function Reconciliation() {
       
       const counts = new Map<string, number>();
       console.log('CSV rows:', result.data.length);
+      console.log('CSV columns:', Object.keys(result.data[0] || {}));
       
-      // Look for DIN and Actual columns
+      // Look for DIN and Actual columns with multiple possible names
       for (const row of result.data as any[]) {
-        const din = row['DIN'] || row['din'] || row['Drug Identification Number'];
-        const actualCount = row['Actual'] || row['actual'] || row['ACTUAL'];
+        const din = row['DIN'] || row['din'] || row['Drug Identification Number'] || row['Drug ID'];
+        const actualCount = row['Actual'] || row['actual'] || row['ACTUAL'] || row['actual_count'];
+        
+        console.log(`Row data - DIN: ${din}, Actual: ${actualCount}, Full row:`, row);
         
         if (din && actualCount) {
           const normalizedDin = din.toString().trim();
@@ -471,11 +474,16 @@ export default function Reconciliation() {
           if (!isNaN(count) && count > 0) {
             counts.set(normalizedDin, count);
             console.log(`Setting saved count for DIN ${normalizedDin}: ${count}`);
+          } else {
+            console.log(`Invalid count for DIN ${normalizedDin}: ${actualCount}`);
           }
+        } else {
+          console.log(`Missing DIN or Actual in row:`, row);
         }
       }
 
       console.log('Final saved counts map:', counts);
+      console.log('Saved counts size:', counts.size);
       setSavedCounts(counts);
       
       if (counts.size === 0) {
@@ -637,6 +645,11 @@ export default function Reconciliation() {
         }
       } else if (startFromPreviousMode === 'file') {
         console.log('Applying saved counts from file, savedCounts size:', savedCounts.size);
+        console.log('Saved counts entries:', Array.from(savedCounts.entries()));
+        
+        // Also log the merged data DINs to see if they match
+        console.log('Merged data DINs:', Array.from(merged.keys()));
+        
         for (const [din, count] of savedCounts) {
           console.log(`Setting opening balance for DIN ${din}: ${count}`);
           openingBalances.set(din, count);
@@ -649,7 +662,9 @@ export default function Reconciliation() {
       for (const [din, data] of merged) {
         const drug = drugMap.get(din);
         const openingBalance = openingBalances.get(din) ?? 0;
-        
+
+        console.log(`Creating item for DIN ${din}: openingBalance=${openingBalance}, drug=${drug?.description}`);
+
         const description = drug?.description ?? (data.description as string | undefined) ?? 'Unknown drug';
         
         items.push({
