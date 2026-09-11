@@ -449,23 +449,30 @@ export default function Reconciliation() {
     if (!savedCountFile) return;
     
     try {
+      console.log('Parsing saved count file:', savedCountFile.name);
       const parsedData = await parseSingleFile(savedCountFile, 'mckesson');
       const counts = new Map<string, number>();
+
+      console.log('Parsed data from saved count file:', parsedData);
 
       // For saved count files, try to find the actual count
       // Check both dispensed and purchased fields, use whichever has a value
       for (const [din, itemData] of parsedData) {
+        console.log(`DIN: ${din}, purchased: ${itemData.purchased}, dispensed: ${itemData.dispensed}`);
         // Use dispensed if it has a value, otherwise use purchased
         // This handles different saved count file formats
         const actualCount = itemData.dispensed > 0 ? itemData.dispensed : itemData.purchased;
         if (actualCount > 0) {
           counts.set(din, actualCount);
+          console.log(`Setting saved count for DIN ${din}: ${actualCount}`);
         }
       }
 
+      console.log('Final saved counts map:', counts);
       setSavedCounts(counts);
       toast.success(`Loaded ${counts.size} saved counts from file`);
     } catch (err) {
+      console.error('Error parsing saved count file:', err);
       const message = err instanceof Error ? err.message : 'Failed to parse saved count file';
       toast.error(message);
     }
@@ -617,9 +624,12 @@ export default function Reconciliation() {
           }
         }
       } else if (startFromPreviousMode === 'file') {
+        console.log('Applying saved counts from file, savedCounts size:', savedCounts.size);
         for (const [din, count] of savedCounts) {
+          console.log(`Setting opening balance for DIN ${din}: ${count}`);
           openingBalances.set(din, count);
         }
+        console.log('Opening balances after applying saved counts:', openingBalances);
       }
       // 'zero' mode uses 0 by default
 
