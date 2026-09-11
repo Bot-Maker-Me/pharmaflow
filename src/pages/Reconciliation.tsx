@@ -469,7 +469,7 @@ export default function Reconciliation() {
         const din = row['DIN'] || row['din'] || row['Drug Identification Number'] || row['Drug ID'];
         const actualCount = row['Actual'] || row['actual'] || row['ACTUAL'] || row['actual_count'];
         
-        console.log(`Row data - DIN: ${din}, Actual: ${actualCount}, Full row:`, row);
+        console.log(`Row data - DIN: "${din}", Actual: "${actualCount}", Full row:`, row);
         
         if (din && actualCount) {
           // Normalize DIN to handle leading zeros and formatting
@@ -484,16 +484,16 @@ export default function Reconciliation() {
           
           if (!isNaN(count) && count > 0) {
             counts.set(normalizedDin, count);
-            console.log(`Setting saved count for DIN ${normalizedDin}: ${count}`);
+            console.log(`✓ Setting saved count for DIN "${normalizedDin}": ${count}`);
           } else {
-            console.log(`Invalid count for DIN ${normalizedDin}: ${actualCount}`);
+            console.log(`✗ Invalid count for DIN "${normalizedDin}": ${actualCount}`);
           }
         } else {
-          console.log(`Missing DIN or Actual in row:`, row);
+          console.log(`✗ Missing DIN or Actual in row:`, row);
         }
       }
 
-      console.log('Final saved counts map:', counts);
+      console.log('Final saved counts map:', Array.from(counts.entries()));
       console.log('Saved counts size:', counts.size);
       setSavedCounts(counts);
       
@@ -662,11 +662,13 @@ export default function Reconciliation() {
         console.log('Merged data DINs:', Array.from(merged.keys()));
         
         // Try to match DINs with different normalization
+        let matchedCount = 0;
         for (const [savedDin, count] of savedCounts) {
           // Try exact match first
           if (merged.has(savedDin)) {
-            console.log(`Exact match found for DIN ${savedDin}: ${count}`);
+            console.log(`✓ Exact match found for DIN "${savedDin}": ${count}`);
             openingBalances.set(savedDin, count);
+            matchedCount++;
           } else {
             // Try with leading zeros variations
             let found = false;
@@ -676,17 +678,19 @@ export default function Reconciliation() {
               const mergedDinNoLeading = mergedDin.replace(/^0+/, '');
               
               if (savedDinNoLeading === mergedDinNoLeading) {
-                console.log(`Match found for DIN ${savedDin} -> ${mergedDin}: ${count}`);
+                console.log(`✓ Fuzzy match found for DIN "${savedDin}" -> "${mergedDin}": ${count}`);
                 openingBalances.set(mergedDin, count);
                 found = true;
+                matchedCount++;
                 break;
               }
             }
             if (!found) {
-              console.log(`No match found for saved DIN ${savedDin}`);
+              console.log(`✗ No match found for saved DIN "${savedDin}"`);
             }
           }
         }
+        console.log(`Matched ${matchedCount} out of ${savedCounts.size} saved counts`);
         console.log('Opening balances after applying saved counts:', openingBalances);
       }
       // 'zero' mode uses 0 by default
