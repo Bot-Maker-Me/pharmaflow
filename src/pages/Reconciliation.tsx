@@ -450,27 +450,39 @@ export default function Reconciliation() {
     
     try {
       console.log('Parsing saved count file:', savedCountFile.name);
-      const parsedData = await parseSingleFile(savedCountFile, 'mckesson');
+      
+      // Parse the saved count file as CSV directly to access "Actual" column
+      const text = await savedCountFile.text();
+      const Papa = await import('papaparse');
+      const result = Papa.parse(text, { header: true });
+      
       const counts = new Map<string, number>();
-
-      console.log('Parsed data from saved count file:', parsedData);
-
-      // For saved count files, try to find the actual count
-      // Check both dispensed and purchased fields, use whichever has a value
-      for (const [din, itemData] of parsedData) {
-        console.log(`DIN: ${din}, purchased: ${itemData.purchased}, dispensed: ${itemData.dispensed}`);
-        // Use dispensed if it has a value, otherwise use purchased
-        // This handles different saved count file formats
-        const actualCount = itemData.dispensed > 0 ? itemData.dispensed : itemData.purchased;
-        if (actualCount > 0) {
-          counts.set(din, actualCount);
-          console.log(`Setting saved count for DIN ${din}: ${actualCount}`);
+      console.log('CSV rows:', result.data.length);
+      
+      // Look for DIN and Actual columns
+      for (const row of result.data as any[]) {
+        const din = row['DIN'] || row['din'] || row['Drug Identification Number'];
+        const actualCount = row['Actual'] || row['actual'] || row['ACTUAL'];
+        
+        if (din && actualCount) {
+          const normalizedDin = din.toString().trim();
+          const count = parseInt(actualCount.toString().trim(), 10);
+          
+          if (!isNaN(count) && count > 0) {
+            counts.set(normalizedDin, count);
+            console.log(`Setting saved count for DIN ${normalizedDin}: ${count}`);
+          }
         }
       }
 
       console.log('Final saved counts map:', counts);
       setSavedCounts(counts);
-      toast.success(`Loaded ${counts.size} saved counts from file`);
+      
+      if (counts.size === 0) {
+        toast.error('No valid counts found in saved count file. Please ensure the file has "DIN" and "Actual" columns.');
+      } else {
+        toast.success(`Loaded ${counts.size} saved counts from file`);
+      }
     } catch (err) {
       console.error('Error parsing saved count file:', err);
       const message = err instanceof Error ? err.message : 'Failed to parse saved count file';
