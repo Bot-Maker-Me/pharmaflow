@@ -14,7 +14,7 @@ const queryClient = new QueryClient({
   },
 });
 
-console.log('Starting PharmaFlow app...');
+console.log('Starting Narcotics Ledger app...');
 
 try {
   const rootElement = document.getElementById('root');

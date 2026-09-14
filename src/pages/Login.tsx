@@ -50,7 +50,7 @@ export default function Login() {
             <Pill className="h-7 w-7 text-white" />
           </div>
           <h1 className="text-2xl font-bold text-neutral-900">Welcome back</h1>
-          <p className="mt-1 text-sm text-neutral-500">Sign in to your PharmaFlow account</p>
+          <p className="mt-1 text-sm text-neutral-500">Sign in to your Narcotics Ledger account</p>
         </div>
 
         <div className="card p-8">

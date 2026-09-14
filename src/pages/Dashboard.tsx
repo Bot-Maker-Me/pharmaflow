@@ -1,32 +1,28 @@
-import { Package, FileText, Scale, TrendingUp, AlertTriangle, Activity, ShoppingCart, Search, Filter } from 'lucide-react';
+import { FileText, Scale, TrendingUp, AlertTriangle, Activity, ShoppingCart, Filter } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useMemo } from 'react';
-import { useDrugs } from '@/hooks/useDrugs';
 import { usePrescriptions } from '@/hooks/usePrescriptions';
 import { useReconciliationCycles } from '@/hooks/useReconciliation';
 import { useAuth } from '@/context/AuthContext';
 import { hasAccess, formatPrice } from '@/types/admin';
 import { useSystemSettings } from '@/hooks/useAdmin';
 import { useAllReconciliationItems } from '@/hooks/useReconciliation';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { motion } from 'framer-motion';
 
 export default function Dashboard() {
-  const { data: drugs, isLoading: drugsLoading } = useDrugs();
   const { data: prescriptions, isLoading: prescriptionsLoading } = usePrescriptions();
   const { data: cycles, isLoading: cyclesLoading } = useReconciliationCycles();
   const { data: allReconciliationItems } = useAllReconciliationItems();
   const { profile } = useAuth();
   const { data: settings } = useSystemSettings();
 
-  const totalDrugs = drugs?.length ?? 0;
-  const lowStockCount = drugs?.filter((d) => d.current_stock <= d.reorder_level).length ?? 0;
   const activePrescriptions = prescriptions?.filter((p) => p.status === 'active').length ?? 0;
   const activeCycles = cycles?.filter((c) => c.status === 'in_progress').length ?? 0;
+  const completedCycles = cycles?.filter((c) => c.status === 'completed').length ?? 0;
   const pendingDispenses = prescriptions?.filter((p) => p.quantity_dispensed < p.quantity_prescribed).length ?? 0;
 
   const recentActivity = useMemo(() => {
-    if (drugsLoading || prescriptionsLoading || cyclesLoading) return [];
+    if (prescriptionsLoading || cyclesLoading) return [];
     
     const activities: Array<{
       type: 'reconciliation' | 'prescription' | 'dispense';
@@ -68,61 +64,9 @@ export default function Dashboard() {
     });
     
     return activities.sort((a, b) => b.time.getTime() - a.time.getTime()).slice(0, 6);
-  }, [cycles, prescriptions, allReconciliationItems, drugsLoading, prescriptionsLoading, cyclesLoading]);
-
-  // Prepare chart data for inventory trends
-  const inventoryChartData = useMemo(() => {
-    if (drugsLoading || !drugs || drugs.length === 0) return [];
-    
-    const topNarcotics = drugs
-      .filter(d => d.schedule === 'Narcotic' || d.schedule === 'Controlled')
-      .sort((a, b) => b.current_stock - a.current_stock)
-      .slice(0, 5);
-    
-    return topNarcotics.map(drug => ({
-      name: drug.description.substring(0, 20) + (drug.description.length > 20 ? '...' : ''),
-      stock: drug.current_stock,
-      reorder: drug.reorder_level,
-    }));
-  }, [drugs, drugsLoading]);
-
-  // Prepare schedule distribution data
-  const scheduleChartData = useMemo(() => {
-    if (drugsLoading || !drugs || drugs.length === 0) return [];
-    
-    const scheduleCounts = drugs.reduce((acc, drug) => {
-      acc[drug.schedule] = (acc[drug.schedule] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-    
-    const colors = ['#14b8a6', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'];
-    
-    return Object.entries(scheduleCounts).map(([name, value], index) => ({
-      name,
-      value,
-      color: colors[index % colors.length],
-    }));
-  }, [drugs, drugsLoading]);
+  }, [cycles, prescriptions, allReconciliationItems, prescriptionsLoading, cyclesLoading]);
 
   const stats = [
-    {
-      label: 'Total Inventory Items',
-      value: totalDrugs,
-      change: `${lowStockCount} low stock`,
-      icon: Package,
-      iconBg: 'bg-primary-50',
-      iconText: 'text-primary-600',
-      changeText: lowStockCount > 0 ? 'text-warning-600' : 'text-primary-600',
-    },
-    {
-      label: 'Active Prescriptions',
-      value: activePrescriptions,
-      change: `${pendingDispenses} pending dispense`,
-      icon: FileText,
-      iconBg: 'bg-secondary-50',
-      iconText: 'text-secondary-600',
-      changeText: 'text-secondary-600',
-    },
     {
       label: 'Reconciliation Cycles',
       value: activeCycles,
@@ -133,19 +77,17 @@ export default function Dashboard() {
       changeText: activeCycles > 0 ? 'text-warning-600' : 'text-success-600',
     },
     {
-      label: 'Low Stock Alerts',
-      value: lowStockCount,
-      change: lowStockCount > 0 ? 'Action needed' : 'All good',
-      icon: AlertTriangle,
-      iconBg: 'bg-error-50',
-      iconText: 'text-error-600',
-      changeText: lowStockCount > 0 ? 'text-error-600' : 'text-success-600',
+      label: 'Completed Reconciliation Cycle',
+      value: completedCycles,
+      change: completedCycles > 0 ? 'Total completed' : 'No cycles yet',
+      icon: FileText,
+      iconBg: 'bg-success-50',
+      iconText: 'text-success-600',
+      changeText: completedCycles > 0 ? 'text-success-600' : 'text-neutral-400',
     },
   ];
 
-  const lowStockDrugs = (drugs ?? []).filter((d) => d.current_stock <= d.reorder_level).slice(0, 5);
-
-  if (drugsLoading || prescriptionsLoading || cyclesLoading) {
+  if (prescriptionsLoading || cyclesLoading) {
     return <DashboardSkeleton />;
   }
 
@@ -242,7 +184,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {stats.map((stat, index) => {
           const Icon = stat.icon;
           return (
@@ -272,14 +214,9 @@ export default function Dashboard() {
         <div className="card p-6 lg:col-span-2">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-neutral-900">Recent Activity</h2>
-            <div className="flex items-center gap-2">
-              <button className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-100" title="Filter">
-                <Filter className="h-4 w-4" />
-              </button>
-              <button className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-100" title="Search">
-                <Search className="h-4 w-4" />
-              </button>
-            </div>
+            <button className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-100" title="Filter">
+              <Filter className="h-4 w-4" />
+            </button>
           </div>
           <div className="mt-4 space-y-1">
             {recentActivity.length === 0 ? (
@@ -330,131 +267,8 @@ export default function Dashboard() {
           <h2 className="text-lg font-semibold text-neutral-900">Quick Actions</h2>
           <div className="mt-4 space-y-2">
             <QuickActionLink to="/reconciliation" label="Start Reconciliation" icon={Scale} />
-            <QuickActionLink to="/prescriptions" label="New Prescription" icon={FileText} />
-            <QuickActionLink to="/inventory" label="Add Inventory Item" icon={Package} />
             <QuickActionLink to="/transactions" label="Manual Adjustment" icon={ShoppingCart} />
           </div>
-
-          {lowStockDrugs.length > 0 && (
-            <div className="mt-6">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Low Stock Alerts</h3>
-              <div className="mt-2 space-y-1">
-                {lowStockDrugs.map((drug) => (
-                  <div key={drug.id} className="flex items-center justify-between rounded-lg px-3 py-2 text-sm">
-                    <span className="text-neutral-700">{drug.description}</span>
-                    <span className="font-medium text-error-600">{drug.current_stock}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Charts Section */}
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Inventory Trends Chart */}
-        <div className="card p-6">
-          <h2 className="text-lg font-semibold text-neutral-900">Top Narcotics Inventory</h2>
-          <p className="mt-1 text-sm text-neutral-500">Current stock levels for controlled substances</p>
-          {inventoryChartData.length > 0 ? (
-            <div className="mt-4 h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={inventoryChartData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                  <XAxis 
-                    dataKey="name" 
-                    tick={{ fontSize: 12 }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <YAxis 
-                    tick={{ fontSize: 12 }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <Tooltip 
-                    contentStyle={{ 
-                      borderRadius: '8px', 
-                      border: '1px solid #f0f0f0',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
-                    }}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="stock" 
-                    stroke="#14b8a6" 
-                    strokeWidth={2}
-                    dot={{ fill: '#14b8a6', strokeWidth: 2, r: 4 }}
-                    activeDot={{ r: 6 }}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="reorder" 
-                    stroke="#ef4444" 
-                    strokeWidth={2}
-                    strokeDasharray="5 5"
-                    dot={{ fill: '#ef4444', strokeWidth: 2, r: 4 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <div className="mt-4 flex h-64 items-center justify-center text-neutral-400">
-              <p className="text-sm">No inventory data available</p>
-            </div>
-          )}
-        </div>
-
-        {/* Schedule Distribution Chart */}
-        <div className="card p-6">
-          <h2 className="text-lg font-semibold text-neutral-900">Schedule Distribution</h2>
-          <p className="mt-1 text-sm text-neutral-500">Drug inventory by schedule type</p>
-          {scheduleChartData.length > 0 ? (
-            <div className="mt-4 h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={scheduleChartData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={80}
-                    paddingAngle={2}
-                    dataKey="value"
-                  >
-                    {scheduleChartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    contentStyle={{ 
-                      borderRadius: '8px', 
-                      border: '1px solid #f0f0f0',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <div className="mt-4 flex h-64 items-center justify-center text-neutral-400">
-              <p className="text-sm">No schedule data available</p>
-            </div>
-          )}
-          {scheduleChartData.length > 0 && (
-            <div className="mt-4 flex flex-wrap gap-3">
-              {scheduleChartData.map((item) => (
-                <div key={item.name} className="flex items-center gap-2">
-                  <div 
-                    className="h-3 w-3 rounded-full" 
-                    style={{ backgroundColor: item.color }}
-                  />
-                  <span className="text-xs text-neutral-600">{item.name} ({item.value})</span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       </div>
     </div>
@@ -481,8 +295,8 @@ function DashboardSkeleton() {
         <div className="mt-2 h-4 w-64 animate-pulse rounded bg-neutral-200" />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[1, 2, 3, 4].map((i) => (
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {[1, 2].map((i) => (
           <div key={i} className="card p-5">
             <div className="flex h-10 w-10 animate-pulse rounded-lg bg-neutral-200" />
             <div className="mt-4 h-8 w-16 animate-pulse rounded bg-neutral-200" />

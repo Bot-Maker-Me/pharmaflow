@@ -34,8 +34,8 @@ export default function SubscriptionPaywall() {
       : isPastDue
         ? 'Your last payment failed. Please update your payment method.'
         : isExpired
-          ? 'Your free trial has ended. Subscribe to continue using PharmaFlow.'
-          : 'Subscribe to continue using PharmaFlow.';
+          ? 'Your free trial has ended. Subscribe to continue using Narcotics Ledger.'
+          : 'Subscribe to continue using Narcotics Ledger.';
 
   const price = settings ? formatPrice(settings.subscription_price_cents) : '$29.00';
 
@@ -75,7 +75,7 @@ export default function SubscriptionPaywall() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Sparkles className="h-5 w-5 text-primary-600" />
-                    <span className="text-sm font-semibold text-neutral-800">PharmaFlow Pro</span>
+                    <span className="text-sm font-semibold text-neutral-800">Narcotics Ledger Pro</span>
                   </div>
                   <div className="text-right">
                     <span className="text-2xl font-bold text-neutral-900">{price}</span>
