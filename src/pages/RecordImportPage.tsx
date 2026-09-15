@@ -18,6 +18,7 @@ import {
   useImportedRecords,
   useSaveImportedRecords,
   type ImportKind,
+  type SaveResult,
 } from '@/hooks/useImportedRecords';
 
 const KIND_META: Record<
@@ -121,8 +122,15 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
     }
 
     try {
-      const result = await saveMutation.mutateAsync(records);
-      toast.success(`Saved ${result.saved} records${result.skipped ? ` (${result.skipped} skipped)` : ''}`);
+      const result: SaveResult = await saveMutation.mutateAsync(records);
+      
+      if (result.errors.length > 0) {
+        toast.error(`Saved ${result.saved} records, ${result.skipped} failed. Check console for details.`);
+        console.error('Save errors:', result.errors);
+      } else {
+        toast.success(`Saved ${result.saved} records${result.skipped ? ` (${result.skipped} skipped)` : ''}`);
+      }
+      
       setRecords([]);
       setFile(null);
     } catch (err) {

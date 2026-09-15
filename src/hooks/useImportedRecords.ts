@@ -15,6 +15,12 @@ export interface ImportedRecordRow {
   created_at: string;
 }
 
+export interface SaveResult {
+  saved: number;
+  skipped: number;
+  errors: string[];
+}
+
 const KIND_CONFIG: Record<
   ImportKind,
   { type: TransactionType; source: string; notesPrefix: string }
@@ -31,20 +37,33 @@ function quantityForKind(kind: ImportKind, record: ParsedDinData): number {
 }
 
 async function ensureDrugId(din: string, description?: string): Promise<string> {
+  // Normalize DIN - remove any non-digit characters and preserve original length
+  const normalizedDin = din.toString().replace(/\D/g, '');
+  
+  // Validate DIN is between 6-10 digits
+  if (!/^\d{6,10}$/.test(normalizedDin)) {
+    console.warn(`Invalid DIN format: ${din} -> ${normalizedDin}`);
+    throw new Error(`Invalid DIN format: ${din}. DIN must be 6-10 digits.`);
+  }
+
   const { data: existing, error: lookupError } = await supabase
     .from('drugs')
     .select('id')
-    .eq('din', din)
+    .eq('din', normalizedDin)
     .limit(1);
 
-  if (lookupError) throw lookupError;
+  if (lookupError) {
+    console.error('Error looking up drug:', lookupError);
+    throw new Error(`Failed to lookup drug ${normalizedDin}: ${lookupError.message}`);
+  }
+  
   if (existing?.[0]?.id) return existing[0].id;
 
   const { data: created, error: createError } = await supabase
     .from('drugs')
     .insert({
-      din,
-      description: description?.trim() || `Imported DIN ${din}`,
+      din: normalizedDin,
+      description: description?.trim() || `Imported DIN ${normalizedDin}`,
       schedule: 'Verify',
       pack_size: 1,
       reorder_level: 0,
@@ -52,7 +71,11 @@ async function ensureDrugId(din: string, description?: string): Promise<string> 
     .select('id')
     .single();
 
-  if (createError) throw createError;
+  if (createError) {
+    console.error('Error creating drug:', createError);
+    throw new Error(`Failed to create drug ${normalizedDin}: ${createError.message}`);
+  }
+  
   return created.id;
 }
 
@@ -86,34 +109,53 @@ async function saveImportedRecords({
 }: {
   kind: ImportKind;
   records: ParsedDinData[];
-}): Promise<{ saved: number; skipped: number }> {
+}): Promise<SaveResult> {
   const config = KIND_CONFIG[kind];
   let saved = 0;
   let skipped = 0;
+  const errors: string[] = [];
+
+  console.log(`Starting to save ${records.length} ${kind} records...`);
 
   for (const record of records) {
-    const qty = quantityForKind(kind, record);
-    if (!record.din || qty === 0) {
+    try {
+      const qty = quantityForKind(kind, record);
+      if (!record.din || qty === 0) {
+        console.log(`Skipping record with invalid DIN or zero quantity: ${record.din}`);
+        skipped += 1;
+        continue;
+      }
+
+      console.log(`Processing DIN ${record.din} with quantity ${qty}`);
+      const drugId = await ensureDrugId(record.din, record.description);
+      const signedQty = config.type === 'PURCHASE' ? qty : -qty;
+
+      const { error: txError } = await supabase.from('inventory_transactions').insert({
+        drug_id: drugId,
+        type: config.type,
+        quantity: signedQty,
+        notes: `${config.notesPrefix} for DIN ${record.din}`,
+        source: config.source,
+      });
+
+      if (txError) {
+        console.error(`Error saving transaction for DIN ${record.din}:`, txError);
+        errors.push(`DIN ${record.din}: ${txError.message}`);
+        skipped += 1;
+      } else {
+        console.log(`Successfully saved transaction for DIN ${record.din}`);
+        saved += 1;
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      console.error(`Error processing record DIN ${record.din}:`, errorMessage);
+      errors.push(`DIN ${record.din}: ${errorMessage}`);
       skipped += 1;
-      continue;
     }
-
-    const drugId = await ensureDrugId(record.din, record.description);
-    const signedQty = config.type === 'PURCHASE' ? qty : -qty;
-
-    const { error } = await supabase.from('inventory_transactions').insert({
-      drug_id: drugId,
-      type: config.type,
-      quantity: signedQty,
-      notes: `${config.notesPrefix} for DIN ${record.din}`,
-      source: config.source,
-    });
-
-    if (error) throw error;
-    saved += 1;
   }
 
-  return { saved, skipped };
+  console.log(`Save complete: ${saved} saved, ${skipped} skipped, ${errors.length} errors`);
+  return { saved, skipped, errors };
 }
 
 export function useImportedRecords(kind: ImportKind) {
@@ -127,10 +169,15 @@ export function useSaveImportedRecords(kind: ImportKind) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (records: ParsedDinData[]) => saveImportedRecords({ kind, records }),
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['imported-records', kind] });
       queryClient.invalidateQueries({ queryKey: ['drugs'] });
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      
+      // Log any errors that occurred during save
+      if (result.errors.length > 0) {
+        console.warn('Errors during save:', result.errors);
+      }
     },
   });
 }
