@@ -204,6 +204,14 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
   };
 
   const handleDeleteFile = async (fileName: string) => {
+    // Check if this is a date-based label (for old records without file_name)
+    const isDateBasedLabel = fileName.startsWith('Imported ');
+    
+    if (isDateBasedLabel) {
+      toast.error('Cannot delete records imported before file tracking was added. Please delete them individually from Transaction History.');
+      return;
+    }
+
     if (!confirm(`Are you sure you want to delete all records from "${fileName}"? This will also remove them from Transaction History.`)) {
       return;
     }
@@ -420,12 +428,16 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
               {(() => {
                 const groupedRecords = new Map<string, typeof savedRecords>();
                 savedRecords.forEach(record => {
-                  const fileName = record.file_name || 'Manual Entry';
+                  const fileName = record.file_name || `Imported ${new Date(record.created_at).toLocaleDateString()}`;
                   if (!groupedRecords.has(fileName)) {
                     groupedRecords.set(fileName, []);
                   }
                   groupedRecords.get(fileName)!.push(record);
                 });
+
+                if (groupedRecords.size === 0) {
+                  return <p className="py-12 text-center text-sm text-neutral-400">No saved records yet</p>;
+                }
 
                 return Array.from(groupedRecords.entries()).map(([fileName, records]) => (
                   <div key={fileName} className="border-b border-neutral-100 last:border-b-0">
