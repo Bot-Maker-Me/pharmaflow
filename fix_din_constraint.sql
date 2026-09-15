@@ -1,7 +1,7 @@
--- Comprehensive database schema fix for production
--- This migration adds ALL missing columns to both drugs and inventory_transactions tables
+-- COMPLETE DATABASE SCHEMA FIX
+-- This migration will add ALL missing columns to fix production database issues
 
--- Add missing columns to drugs table
+-- First, let's check and fix the drugs table
 DO $$
 BEGIN
     -- Add pack_size column if it doesn't exist
@@ -21,9 +21,17 @@ BEGIN
     END IF;
 END $$;
 
--- Add missing columns to inventory_transactions table
+-- Now fix the inventory_transactions table
 DO $$
 BEGIN
+    -- Add type column if it doesn't exist
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'inventory_transactions' AND column_name = 'type'
+    ) THEN
+        ALTER TABLE inventory_transactions ADD COLUMN type TEXT NOT NULL DEFAULT 'PURCHASE' CHECK (type IN ('PURCHASE', 'DISPENSE', 'ADJUSTMENT'));
+    END IF;
+    
     -- Add source column if it doesn't exist
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns 
@@ -41,3 +49,7 @@ ALTER TABLE drugs ADD CONSTRAINT drugs_din_check
 -- Re-add unique constraint for drugs
 ALTER TABLE drugs DROP CONSTRAINT IF EXISTS drugs_user_id_din_key;
 ALTER TABLE drugs ADD CONSTRAINT drugs_user_id_din_key UNIQUE (user_id, din);
+
+-- Add indexes if they don't exist
+CREATE INDEX IF NOT EXISTS idx_transactions_type ON inventory_transactions(type);
+CREATE INDEX IF NOT EXISTS idx_transactions_source ON inventory_transactions(source);

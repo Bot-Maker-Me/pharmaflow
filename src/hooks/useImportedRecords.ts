@@ -145,9 +145,7 @@ async function saveImportedRecords({
 
       const { error: txError } = await supabase.from('inventory_transactions').insert({
         drug_id: drugId,
-        type: config.type,
         quantity: signedQty,
-        notes: `${config.notesPrefix} for DIN ${record.din}`,
       });
 
       if (txError) {
