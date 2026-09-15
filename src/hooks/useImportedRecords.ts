@@ -83,7 +83,7 @@ async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow
   // Try to filter by source, if it fails (column doesn't exist), fall back to filtering by type
   let query = supabase
     .from('inventory_transactions')
-    .select('id, type, quantity, created_at, drugs!inner(din, description)')
+    .select('id, transaction_type, quantity, created_at, drugs!inner(din, description)')
     .order('created_at', { ascending: false });
 
   // Try to filter by source if it exists
@@ -93,8 +93,8 @@ async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow
     // If source column doesn't exist, filter by type instead
     query = supabase
       .from('inventory_transactions')
-      .select('id, type, quantity, created_at, drugs!inner(din, description)')
-      .eq('type', KIND_CONFIG[kind].type)
+      .select('id, transaction_type, quantity, created_at, drugs!inner(din, description)')
+      .eq('transaction_type', KIND_CONFIG[kind].type)
       .order('created_at', { ascending: false });
   }
 
@@ -109,7 +109,7 @@ async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow
       din: drug?.din ?? '--------',
       description: drug?.description ?? 'Unknown',
       quantity: Math.abs(Number(row.quantity ?? 0)),
-      type: row.type as TransactionType,
+      type: (row as any).transaction_type || row.type || KIND_CONFIG[kind].type as TransactionType,
       source: (row as any).source || KIND_CONFIG[kind].source,
       created_at: row.created_at,
     };
@@ -145,6 +145,7 @@ async function saveImportedRecords({
 
       const { error: txError } = await supabase.from('inventory_transactions').insert({
         drug_id: drugId,
+        transaction_type: config.type,
         quantity: signedQty,
       });
 

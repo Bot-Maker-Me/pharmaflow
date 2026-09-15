@@ -32,9 +32,9 @@ async function fetchTransactions(params: FetchParams): Promise<{
     query = query.or(`drugs.din.ilike.%${search}%,drugs.description.ilike.%${search}%`);
   }
 
-  // Apply type filter
+  // Apply type filter (handle both 'type' and 'transaction_type' column names)
   if (type) {
-    query = query.eq('type', type);
+    query = query.or(`type.eq.${type},transaction_type.eq.${type}`);
   }
 
   // Apply source filter
@@ -61,10 +61,10 @@ async function fetchTransactions(params: FetchParams): Promise<{
         id: row.id,
         user_id: row.user_id,
         drug_id: row.drug_id,
-        type: row.type,
+        type: (row as any).transaction_type || row.type,
         quantity: row.quantity,
         notes: row.notes,
-        source: row.source,
+        source: (row as any).source,
         created_at: row.created_at,
         drug_description: drug?.description ?? 'Unknown',
         drug_din: drug?.din ?? '--------',
