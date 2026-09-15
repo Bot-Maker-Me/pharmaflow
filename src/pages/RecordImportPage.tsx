@@ -17,6 +17,7 @@ import type { ParsedDinData } from '@/types/reconciliation';
 import {
   useImportedRecords,
   useSaveImportedRecords,
+  useDeleteImportedFile,
   type ImportKind,
   type SaveResult,
 } from '@/hooks/useImportedRecords';
@@ -67,6 +68,7 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
   const Icon = meta.icon;
   const { data: savedRecords, isLoading: savedLoading } = useImportedRecords(kind);
   const saveMutation = useSaveImportedRecords(kind);
+  const deleteMutation = useDeleteImportedFile(kind);
 
   const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -179,7 +181,10 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
     }
 
     try {
-      const result: SaveResult = await saveMutation.mutateAsync(records);
+      // Use the first file name as the identifier for this batch
+      const fileName = files.length > 0 ? files[0].name : undefined;
+      
+      const result: SaveResult = await saveMutation.mutateAsync({ records, fileName });
       
       if (result.errors.length > 0) {
         toast.error(`Saved ${result.saved} records, ${result.skipped} failed. Check console for details.`);
@@ -194,6 +199,20 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
       setShowPreviewModal(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save records';
+      toast.error(message);
+    }
+  };
+
+  const handleDeleteFile = async (fileName: string) => {
+    if (!confirm(`Are you sure you want to delete all records from "${fileName}"? This will also remove them from Transaction History.`)) {
+      return;
+    }
+
+    try {
+      await deleteMutation.mutateAsync(fileName);
+      toast.success(`Deleted all records from "${fileName}"`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete records';
       toast.error(message);
     }
   };
@@ -396,29 +415,73 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
           ) : !savedRecords || savedRecords.length === 0 ? (
             <p className="py-12 text-center text-sm text-neutral-400">No saved records yet</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-neutral-100 bg-neutral-50/50">
-                    <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">DIN</th>
-                    <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">Description</th>
-                    <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wider text-neutral-500">{meta.qtyLabel}</th>
-                    <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wider text-neutral-500">Saved</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {savedRecords.map((record) => (
-                    <tr key={record.id} className="border-b border-neutral-50 hover:bg-neutral-50/50">
-                      <td className="px-3 py-3 text-sm font-mono text-neutral-800">{record.din}</td>
-                      <td className="px-3 py-3 text-sm text-neutral-600">{record.description}</td>
-                      <td className="px-3 py-3 text-right text-sm text-neutral-600">{record.quantity}</td>
-                      <td className="px-3 py-3 text-right text-xs text-neutral-400">
-                        {new Date(record.created_at).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div>
+              {/* Group records by file_name */}
+              {(() => {
+                const groupedRecords = new Map<string, typeof savedRecords>();
+                savedRecords.forEach(record => {
+                  const fileName = record.file_name || 'Manual Entry';
+                  if (!groupedRecords.has(fileName)) {
+                    groupedRecords.set(fileName, []);
+                  }
+                  groupedRecords.get(fileName)!.push(record);
+                });
+
+                return Array.from(groupedRecords.entries()).map(([fileName, records]) => (
+                  <div key={fileName} className="border-b border-neutral-100 last:border-b-0">
+                    <div className="flex items-center justify-between bg-neutral-50 px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <FileSpreadsheet className="h-4 w-4 text-neutral-500" />
+                        <span className="text-sm font-medium text-neutral-800">{fileName}</span>
+                        <span className="text-xs text-neutral-500">({records.length} records)</span>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteFile(fileName)}
+                        disabled={deleteMutation.isPending}
+                        className="rounded p-1.5 text-neutral-400 transition-colors hover:bg-error-50 hover:text-error-600 disabled:opacity-50"
+                        title="Delete all records from this file"
+                      >
+                        {deleteMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-b border-neutral-100 bg-neutral-50/50">
+                            <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">DIN</th>
+                            <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">Description</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-neutral-500">{meta.qtyLabel}</th>
+                            <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-neutral-500">Saved</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {records.slice(0, 5).map((record) => (
+                            <tr key={record.id} className="border-b border-neutral-50 hover:bg-neutral-50/50">
+                              <td className="px-3 py-2 text-sm font-mono text-neutral-800">{record.din}</td>
+                              <td className="px-3 py-2 text-sm text-neutral-600">{record.description}</td>
+                              <td className="px-3 py-2 text-right text-sm text-neutral-600">{record.quantity}</td>
+                              <td className="px-3 py-2 text-right text-xs text-neutral-400">
+                                {new Date(record.created_at).toLocaleString()}
+                              </td>
+                            </tr>
+                          ))}
+                          {records.length > 5 && (
+                            <tr>
+                              <td colSpan={4} className="px-3 py-2 text-center text-xs text-neutral-400">
+                                +{records.length - 5} more records
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ));
+              })()}
             </div>
           )}
         </div>

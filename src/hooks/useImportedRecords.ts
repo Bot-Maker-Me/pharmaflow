@@ -13,6 +13,7 @@ export interface ImportedRecordRow {
   type: TransactionType;
   source: string;
   created_at: string;
+  file_name?: string;
 }
 
 export interface SaveResult {
@@ -83,7 +84,7 @@ async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow
   // Try to filter by source, if it fails (column doesn't exist), fall back to filtering by type
   let query = supabase
     .from('inventory_transactions')
-    .select('id, transaction_type, quantity, created_at, date, drugs!inner(din, description)')
+    .select('id, transaction_type, quantity, created_at, date, file_name, drugs!inner(din, description)')
     .order('created_at', { ascending: false });
 
   // Try to filter by source if it exists
@@ -93,7 +94,7 @@ async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow
     // If source column doesn't exist, filter by type instead
     query = supabase
       .from('inventory_transactions')
-      .select('id, transaction_type, quantity, created_at, date, drugs!inner(din, description)')
+      .select('id, transaction_type, quantity, created_at, date, file_name, drugs!inner(din, description)')
       .eq('transaction_type', KIND_CONFIG[kind].type)
       .order('created_at', { ascending: false });
   }
@@ -112,6 +113,7 @@ async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow
       type: (row as any).transaction_type || row.type || KIND_CONFIG[kind].type as TransactionType,
       source: (row as any).source || KIND_CONFIG[kind].source,
       created_at: (row as any).date || row.created_at || new Date().toISOString(),
+      file_name: (row as any).file_name,
     };
   });
 }
@@ -119,9 +121,11 @@ async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow
 async function saveImportedRecords({
   kind,
   records,
+  fileName,
 }: {
   kind: ImportKind;
   records: ParsedDinData[];
+  fileName?: string;
 }): Promise<SaveResult> {
   const config = KIND_CONFIG[kind];
   let saved = 0;
@@ -148,6 +152,7 @@ async function saveImportedRecords({
         transaction_type: config.type,
         quantity: signedQty,
         date: new Date().toISOString(),
+        file_name: fileName,
       });
 
       if (txError) {
@@ -180,7 +185,8 @@ export function useImportedRecords(kind: ImportKind) {
 export function useSaveImportedRecords(kind: ImportKind) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (records: ParsedDinData[]) => saveImportedRecords({ kind, records }),
+    mutationFn: ({ records, fileName }: { records: ParsedDinData[]; fileName?: string }) => 
+      saveImportedRecords({ kind, records, fileName }),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['imported-records', kind] });
       queryClient.invalidateQueries({ queryKey: ['drugs'] });
@@ -190,6 +196,31 @@ export function useSaveImportedRecords(kind: ImportKind) {
       if (result.errors.length > 0) {
         console.warn('Errors during save:', result.errors);
       }
+    },
+  });
+}
+
+async function deleteTransactionsByFileName(fileName: string, kind: ImportKind): Promise<number> {
+  const config = KIND_CONFIG[kind];
+  
+  const { error } = await supabase
+    .from('inventory_transactions')
+    .delete()
+    .eq('file_name', fileName)
+    .eq('transaction_type', config.type);
+
+  if (error) throw error;
+  return 0; // Supabase doesn't return count, we'll rely on cache invalidation
+}
+
+export function useDeleteImportedFile(kind: ImportKind) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (fileName: string) => deleteTransactionsByFileName(fileName, kind),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['imported-records', kind] });
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      queryClient.invalidateQueries({ queryKey: ['drugs'] });
     },
   });
 }

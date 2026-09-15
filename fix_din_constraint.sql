@@ -24,12 +24,16 @@ END $$;
 -- Now fix the inventory_transactions table
 DO $$
 BEGIN
+    -- Drop existing check constraints to avoid conflicts
+    ALTER TABLE inventory_transactions DROP CONSTRAINT IF EXISTS inventory_transactions_transaction_type_check;
+    ALTER TABLE inventory_transactions DROP CONSTRAINT IF EXISTS inventory_transactions_type_check;
+    
     -- Add transaction_type column if it doesn't exist (some databases use transaction_type instead of type)
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns 
         WHERE table_name = 'inventory_transactions' AND column_name = 'transaction_type'
     ) THEN
-        ALTER TABLE inventory_transactions ADD COLUMN transaction_type TEXT NOT NULL DEFAULT 'PURCHASE' CHECK (transaction_type IN ('PURCHASE', 'DISPENSE', 'ADJUSTMENT'));
+        ALTER TABLE inventory_transactions ADD COLUMN transaction_type TEXT NOT NULL DEFAULT 'PURCHASE';
     END IF;
     
     -- Also add type column for compatibility
@@ -37,7 +41,7 @@ BEGIN
         SELECT 1 FROM information_schema.columns 
         WHERE table_name = 'inventory_transactions' AND column_name = 'type'
     ) THEN
-        ALTER TABLE inventory_transactions ADD COLUMN type TEXT NOT NULL DEFAULT 'PURCHASE' CHECK (type IN ('PURCHASE', 'DISPENSE', 'ADJUSTMENT'));
+        ALTER TABLE inventory_transactions ADD COLUMN type TEXT NOT NULL DEFAULT 'PURCHASE';
     END IF;
     
     -- Add source column if it doesn't exist
@@ -55,6 +59,22 @@ BEGIN
     ) THEN
         ALTER TABLE inventory_transactions ADD COLUMN date TIMESTAMPTZ DEFAULT now();
     END IF;
+    
+    -- Add file_name column to track which file a transaction came from
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'inventory_transactions' AND column_name = 'file_name'
+    ) THEN
+        ALTER TABLE inventory_transactions ADD COLUMN file_name TEXT;
+    END IF;
+    
+    -- Add check constraint for transaction_type (accept both uppercase and lowercase)
+    ALTER TABLE inventory_transactions ADD CONSTRAINT inventory_transactions_transaction_type_check 
+      CHECK (transaction_type IN ('PURCHASE', 'DISPENSE', 'ADJUSTMENT', 'purchase', 'dispense', 'adjustment'));
+      
+    -- Add check constraint for type (accept both uppercase and lowercase)
+    ALTER TABLE inventory_transactions ADD CONSTRAINT inventory_transactions_type_check 
+      CHECK (type IN ('PURCHASE', 'DISPENSE', 'ADJUSTMENT', 'purchase', 'dispense', 'adjustment'));
 END $$;
 
 -- Fix DIN constraint to be more flexible
