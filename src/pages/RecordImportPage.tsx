@@ -12,7 +12,7 @@ import {
   Check,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { parseSingleFile } from '@/lib/fileParser';
+import { parseSingleFile, parseSingleFileWithPreview, type FilePreview } from '@/lib/fileParser';
 import type { ParsedDinData } from '@/types/reconciliation';
 import {
   useImportedRecords,
@@ -68,51 +68,108 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
   const { data: savedRecords, isLoading: savedLoading } = useImportedRecords(kind);
   const saveMutation = useSaveImportedRecords(kind);
 
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [parsing, setParsing] = useState(false);
   const [records, setRecords] = useState<ParsedDinData[]>([]);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [filePreviews, setFilePreviews] = useState<FilePreview[]>([]);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
 
   const handleFileDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    const droppedFile = e.dataTransfer.files?.[0];
-    if (!droppedFile) return;
+    const droppedFiles = Array.from(e.dataTransfer.files || []);
+    if (droppedFiles.length === 0) return;
 
-    const ext = droppedFile.name.split('.').pop()?.toLowerCase();
-    if (ext !== 'csv' && ext !== 'xlsx' && ext !== 'xls') {
-      toast.error('File must be .csv, .xlsx, or .xls');
+    const validFiles = droppedFiles.filter(file => {
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      return ext === 'csv' || ext === 'xlsx' || ext === 'xls';
+    });
+
+    if (validFiles.length === 0) {
+      toast.error('Files must be .csv, .xlsx, or .xls');
       return;
     }
-    setFile(droppedFile);
+
+    setFiles(prev => [...prev, ...validFiles]);
     setDragOver(false);
   }, []);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) setFile(selectedFile);
+    const selectedFiles = Array.from(e.target.files || []);
+    if (selectedFiles.length > 0) {
+      setFiles(prev => [...prev, ...selectedFiles]);
+    }
   };
 
-  const handleProcessFile = async () => {
-    if (!file) {
-      toast.error('Please upload a file first');
+  const handleRemoveFile = (index: number) => {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleClearAllFiles = () => {
+    setFiles([]);
+  };
+
+  const handleProcessFiles = async () => {
+    if (files.length === 0) {
+      toast.error('Please upload at least one file');
       return;
     }
 
     setParsing(true);
     try {
-      // Create deduplication set for single file processing
+      console.log(`Starting to process ${files.length} files...`);
+
+      // Create SHARED deduplication set to catch duplicates across multiple files
       const seenSignatures = new Set<string>();
-      const parsedData = await parseSingleFile(file, meta.parseSource, seenSignatures);
-      const recordsArray = Array.from(parsedData.values());
+      let allData = new Map<string, any>();
+      let previews: FilePreview[] = [];
+
+      // Process all files
+      for (const file of files) {
+        console.log(`Processing file: ${file.name}`);
+        const { data, preview } = await parseSingleFileWithPreview(file, meta.parseSource, undefined, seenSignatures);
+
+        for (const [din, itemData] of data) {
+          const existing = allData.get(din);
+          if (existing) {
+            if (kind === 'purchase') {
+              existing.purchased += itemData.purchased;
+            } else {
+              existing.dispensed += itemData.dispensed;
+            }
+            existing.transactions = [...(existing.transactions || []), ...(itemData.transactions || [])];
+          } else {
+            allData.set(din, itemData);
+          }
+        }
+
+        if (preview) previews.push(preview);
+      }
+
+      console.log('All files parsed successfully', { 
+        dataSize: allData.size, 
+        files: files.length 
+      });
+
+      // Set previews and show modal
+      setFilePreviews(previews);
+      setShowPreviewModal(true);
+
+      // Convert to array and set records
+      const recordsArray = Array.from(allData.values());
       setRecords(recordsArray);
-      toast.success(`Processed ${recordsArray.length} records`);
+      toast.success(`Processed ${recordsArray.length} records from ${files.length} files`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to parse file';
+      const message = err instanceof Error ? err.message : 'Failed to parse files';
       toast.error(message);
     }
     setParsing(false);
+  };
+
+  const handleProcessFile = async () => {
+    await handleProcessFiles();
   };
 
   const handleSaveRecords = async () => {
@@ -132,7 +189,9 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
       }
       
       setRecords([]);
-      setFile(null);
+      setFiles([]);
+      setFilePreviews([]);
+      setShowPreviewModal(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save records';
       toast.error(message);
@@ -175,7 +234,7 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
           label={meta.dropLabel}
           description={meta.dropDescription}
           icon={Icon}
-          file={file}
+          files={files}
           dragOver={dragOver}
           accept=".csv,.xlsx,.xls"
           onDrop={handleFileDrop}
@@ -185,18 +244,19 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
           }}
           onDragLeave={() => setDragOver(false)}
           onFileSelect={handleFileSelect}
-          onClear={() => setFile(null)}
+          onRemoveFile={handleRemoveFile}
+          onClearAll={handleClearAllFiles}
         />
       </div>
 
       <div className="mb-6 flex justify-center">
         <button
           className="btn-primary"
-          onClick={handleProcessFile}
-          disabled={!file || parsing}
+          onClick={handleProcessFiles}
+          disabled={files.length === 0 || parsing}
         >
           {parsing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-          {parsing ? 'Processing...' : 'Process File'}
+          {parsing ? 'Processing...' : `Process ${files.length} File${files.length !== 1 ? 's' : ''}`}
         </button>
       </div>
 
@@ -262,6 +322,70 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
         </div>
       )}
 
+      {/* File Preview Modal */}
+      {showPreviewModal && filePreviews.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="card max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-neutral-900">File Processing Preview</h3>
+              <button
+                onClick={() => setShowPreviewModal(false)}
+                className="rounded-lg p-1.5 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              {filePreviews.map((preview, index) => (
+                <div key={index} className="rounded-lg bg-neutral-50 p-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <h4 className="font-medium text-neutral-800">{preview.fileName}</h4>
+                    <span className="text-xs text-neutral-500">{preview.rowCount} rows</span>
+                  </div>
+                  {preview.dateRange && (
+                    <p className="text-xs text-neutral-500">
+                      Date range: {preview.dateRange.start?.toLocaleDateString()} - {preview.dateRange.end?.toLocaleDateString()}
+                    </p>
+                  )}
+                  {preview.sampleData && preview.sampleData.length > 0 && (
+                    <div className="mt-2 overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-neutral-200">
+                            {Object.keys(preview.sampleData[0]).map(key => (
+                              <th key={key} className="px-2 py-1 text-left font-medium text-neutral-600">{key}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {preview.sampleData.slice(0, 3).map((row, rowIndex) => (
+                            <tr key={rowIndex} className="border-b border-neutral-100">
+                              {Object.values(row).map((value, cellIndex) => (
+                                <td key={cellIndex} className="px-2 py-1 text-neutral-600">{String(value)}</td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={() => setShowPreviewModal(false)}
+                className="btn-primary"
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div>
         <h2 className="mb-4 text-lg font-semibold text-neutral-900">Saved Records</h2>
         <div className="card overflow-hidden">
@@ -307,14 +431,15 @@ interface DropZoneProps {
   label: string;
   description: string;
   icon: typeof FileSpreadsheet;
-  file: File | null;
+  files: File[];
   dragOver: boolean;
   accept: string;
   onDrop: (e: DragEvent<HTMLDivElement>) => void;
   onDragOver: (e: DragEvent<HTMLDivElement>) => void;
   onDragLeave: () => void;
   onFileSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onClear: () => void;
+  onRemoveFile: (index: number) => void;
+  onClearAll: () => void;
 }
 
 function DropZone(props: DropZoneProps) {
@@ -337,31 +462,49 @@ function DropZone(props: DropZoneProps) {
         ref={inputRef}
         type="file"
         accept={props.accept}
+        multiple
         className="hidden"
         onChange={props.onFileSelect}
       />
 
-      {props.file ? (
-        <div className="flex w-full items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-success-50">
-              <CheckCircle2 className="h-5 w-5 text-success-600" />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-neutral-800">{props.file.name}</p>
-              <p className="text-xs text-neutral-400">{(props.file.size / 1024).toFixed(1)} KB</p>
-            </div>
+      {props.files.length > 0 ? (
+        <div className="w-full">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-sm font-medium text-neutral-700">{props.files.length} file{props.files.length !== 1 ? 's' : ''} selected</p>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                props.onClearAll();
+              }}
+              className="text-xs text-neutral-400 hover:text-neutral-600 transition-colors"
+            >
+              Clear all
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              props.onClear();
-            }}
-            className="rounded-lg p-1.5 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-600"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="space-y-2 max-h-40 overflow-y-auto">
+            {props.files.map((file, index) => (
+              <div key={`${file.name}-${index}`} className="flex items-center justify-between rounded-lg bg-neutral-50 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-success-600" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-neutral-800 truncate">{file.name}</p>
+                    <p className="text-xs text-neutral-400">{(file.size / 1024).toFixed(1)} KB</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    props.onRemoveFile(index);
+                  }}
+                  className="rounded p-1 text-neutral-400 transition-colors hover:bg-neutral-200 hover:text-neutral-600"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       ) : (
         <>
@@ -374,7 +517,7 @@ function DropZone(props: DropZoneProps) {
           </div>
           <p className="mt-4 text-sm font-semibold text-neutral-700">{props.label}</p>
           <p className="mt-1 text-xs text-neutral-400">{props.description}</p>
-          <p className="mt-2 text-xs text-neutral-300">Drag & drop or click to browse</p>
+          <p className="mt-2 text-xs text-neutral-300">Drag & drop or click to browse (multiple files supported)</p>
         </>
       )}
     </div>
