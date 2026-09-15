@@ -47,6 +47,14 @@ BEGIN
     ) THEN
         ALTER TABLE inventory_transactions ADD COLUMN source TEXT DEFAULT 'manual';
     END IF;
+    
+    -- Add date column if it doesn't exist (some databases use date instead of created_at)
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'inventory_transactions' AND column_name = 'date'
+    ) THEN
+        ALTER TABLE inventory_transactions ADD COLUMN date TIMESTAMPTZ DEFAULT now();
+    END IF;
 END $$;
 
 -- Fix DIN constraint to be more flexible

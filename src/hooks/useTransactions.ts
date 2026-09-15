@@ -42,12 +42,12 @@ async function fetchTransactions(params: FetchParams): Promise<{
     query = query.eq('source', source);
   }
 
-  // Apply date range filter
+  // Apply date range filter (handle both 'date' and 'created_at' column names)
   if (startDate) {
-    query = query.gte('created_at', startDate);
+    query = query.or(`created_at.gte.${startDate},date.gte.${startDate}`);
   }
   if (endDate) {
-    query = query.lte('created_at', endDate);
+    query = query.or(`created_at.lte.${endDate},date.lte.${endDate}`);
   }
 
   const { data, error, count } = await query;
@@ -65,7 +65,7 @@ async function fetchTransactions(params: FetchParams): Promise<{
         quantity: row.quantity,
         notes: row.notes,
         source: (row as any).source,
-        created_at: row.created_at,
+        created_at: (row as any).date || row.created_at,
         drug_description: drug?.description ?? 'Unknown',
         drug_din: drug?.din ?? '--------',
       } as TransactionWithDrug;

@@ -83,7 +83,7 @@ async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow
   // Try to filter by source, if it fails (column doesn't exist), fall back to filtering by type
   let query = supabase
     .from('inventory_transactions')
-    .select('id, transaction_type, quantity, created_at, drugs!inner(din, description)')
+    .select('id, transaction_type, quantity, created_at, date, drugs!inner(din, description)')
     .order('created_at', { ascending: false });
 
   // Try to filter by source if it exists
@@ -93,7 +93,7 @@ async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow
     // If source column doesn't exist, filter by type instead
     query = supabase
       .from('inventory_transactions')
-      .select('id, transaction_type, quantity, created_at, drugs!inner(din, description)')
+      .select('id, transaction_type, quantity, created_at, date, drugs!inner(din, description)')
       .eq('transaction_type', KIND_CONFIG[kind].type)
       .order('created_at', { ascending: false });
   }
@@ -111,7 +111,7 @@ async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow
       quantity: Math.abs(Number(row.quantity ?? 0)),
       type: (row as any).transaction_type || row.type || KIND_CONFIG[kind].type as TransactionType,
       source: (row as any).source || KIND_CONFIG[kind].source,
-      created_at: row.created_at,
+      created_at: (row as any).date || row.created_at || new Date().toISOString(),
     };
   });
 }
@@ -147,6 +147,7 @@ async function saveImportedRecords({
         drug_id: drugId,
         transaction_type: config.type,
         quantity: signedQty,
+        date: new Date().toISOString(),
       });
 
       if (txError) {
