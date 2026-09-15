@@ -79,29 +79,23 @@ async function ensureDrugId(din: string, description?: string): Promise<string> 
 }
 
 async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow[]> {
-  const { source } = KIND_CONFIG[kind];
+  const config = KIND_CONFIG[kind];
   
-  // Try to filter by source, if it fails (column doesn't exist), fall back to filtering by type
+  // Filter by transaction_type instead of source for reliability
   let query = supabase
     .from('inventory_transactions')
     .select('id, transaction_type, quantity, created_at, date, file_name, drugs!inner(din, description)')
+    .eq('transaction_type', config.type)
     .order('created_at', { ascending: false });
-
-  // Try to filter by source if it exists
-  try {
-    query = query.eq('source', source);
-  } catch (e) {
-    // If source column doesn't exist, filter by type instead
-    query = supabase
-      .from('inventory_transactions')
-      .select('id, transaction_type, quantity, created_at, date, file_name, drugs!inner(din, description)')
-      .eq('transaction_type', KIND_CONFIG[kind].type)
-      .order('created_at', { ascending: false });
-  }
 
   const { data, error } = await query;
 
-  if (error) throw error;
+  if (error) {
+    console.error('Error fetching imported records:', error);
+    throw error;
+  }
+
+  console.log(`Fetched ${data?.length || 0} records for kind ${kind}`);
 
   return (data ?? []).map((row) => {
     const drug = row.drugs as unknown as { din: string; description: string };
