@@ -79,11 +79,26 @@ async function ensureDrugId(din: string, description?: string): Promise<string> 
 
 async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow[]> {
   const { source } = KIND_CONFIG[kind];
-  const { data, error } = await supabase
+  
+  // Try to filter by source, if it fails (column doesn't exist), fall back to filtering by type
+  let query = supabase
     .from('inventory_transactions')
-    .select('id, type, quantity, source, created_at, drugs!inner(din, description)')
-    .eq('source', source)
+    .select('id, type, quantity, created_at, drugs!inner(din, description)')
     .order('created_at', { ascending: false });
+
+  // Try to filter by source if it exists
+  try {
+    query = query.eq('source', source);
+  } catch (e) {
+    // If source column doesn't exist, filter by type instead
+    query = supabase
+      .from('inventory_transactions')
+      .select('id, type, quantity, created_at, drugs!inner(din, description)')
+      .eq('type', KIND_CONFIG[kind].type)
+      .order('created_at', { ascending: false });
+  }
+
+  const { data, error } = await query;
 
   if (error) throw error;
 
@@ -95,7 +110,7 @@ async function fetchImportedRecords(kind: ImportKind): Promise<ImportedRecordRow
       description: drug?.description ?? 'Unknown',
       quantity: Math.abs(Number(row.quantity ?? 0)),
       type: row.type as TransactionType,
-      source: row.source,
+      source: (row as any).source || KIND_CONFIG[kind].source,
       created_at: row.created_at,
     };
   });
@@ -133,7 +148,6 @@ async function saveImportedRecords({
         type: config.type,
         quantity: signedQty,
         notes: `${config.notesPrefix} for DIN ${record.din}`,
-        source: config.source,
       });
 
       if (txError) {

@@ -46,7 +46,6 @@ CREATE TABLE IF NOT EXISTS inventory_transactions (
   type text NOT NULL CHECK (type IN ('PURCHASE', 'DISPENSE', 'ADJUSTMENT')),
   quantity integer NOT NULL,
   notes text,
-  source text NOT NULL DEFAULT 'manual',
   created_at timestamptz DEFAULT now()
 );
 
@@ -88,8 +87,7 @@ CREATE OR REPLACE FUNCTION add_inventory_transaction(
   p_drug_id uuid,
   p_type text,
   p_quantity integer,
-  p_notes text DEFAULT NULL,
-  p_source text DEFAULT 'manual'
+  p_notes text DEFAULT NULL
 )
 RETURNS inventory_transactions
 LANGUAGE plpgsql
@@ -163,8 +161,8 @@ BEGIN
   END IF;
 
   -- Insert the transaction
-  INSERT INTO inventory_transactions (user_id, drug_id, type, quantity, notes, source)
-  VALUES (v_user_id, p_drug_id, p_type, v_actual_quantity, p_notes, p_source)
+  INSERT INTO inventory_transactions (user_id, drug_id, type, quantity, notes)
+  VALUES (v_user_id, p_drug_id, p_type, v_actual_quantity, p_notes)
   RETURNING * INTO v_inserted;
 
   RETURN v_inserted;
