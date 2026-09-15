@@ -39,8 +39,6 @@ CREATE TABLE IF NOT EXISTS drugs (
   din text NOT NULL,
   description text NOT NULL,
   schedule text NOT NULL CHECK (schedule IN ('Narcotic', 'Controlled', 'Targeted', 'Verify')),
-  pack_size integer NOT NULL DEFAULT 1 CHECK (pack_size > 0),
-  reorder_level integer NOT NULL DEFAULT 0 CHECK (reorder_level >= 0),
   created_at timestamptz DEFAULT now(),
   UNIQUE (user_id, din),
   CHECK (din ~ '^[0-9]{6,10}$')

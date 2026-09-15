@@ -1,4 +1,4 @@
--- Fix missing pack_size column and DIN constraint issues
+-- Fix missing columns and DIN constraint issues
 -- This migration fixes production database schema issues
 
 -- Add missing pack_size column if it doesn't exist
@@ -9,6 +9,17 @@ BEGIN
         WHERE table_name = 'drugs' AND column_name = 'pack_size'
     ) THEN
         ALTER TABLE drugs ADD COLUMN pack_size INTEGER DEFAULT 1 CHECK (pack_size > 0);
+    END IF;
+END $$;
+
+-- Add missing reorder_level column if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'drugs' AND column_name = 'reorder_level'
+    ) THEN
+        ALTER TABLE drugs ADD COLUMN reorder_level INTEGER DEFAULT 0 CHECK (reorder_level >= 0);
     END IF;
 END $$;
 
