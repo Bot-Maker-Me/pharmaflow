@@ -65,7 +65,6 @@ async function ensureDrugId(din: string, description?: string): Promise<string> 
       din: normalizedDin,
       description: description?.trim() || `Imported DIN ${normalizedDin}`,
       schedule: 'Verify',
-      pack_size: 1,
       reorder_level: 0,
     })
     .select('id')

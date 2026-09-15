@@ -1,3 +1,17 @@
+-- Fix missing pack_size column and DIN constraint issues
+-- This migration fixes production database schema issues
+
+-- Add missing pack_size column if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'drugs' AND column_name = 'pack_size'
+    ) THEN
+        ALTER TABLE drugs ADD COLUMN pack_size INTEGER DEFAULT 1 CHECK (pack_size > 0);
+    END IF;
+END $$;
+
 -- Fix DIN constraint to be more flexible
 -- Remove the strict 8-digit check and allow variable length DINs
 -- This will handle real-world DINs that may have different formats

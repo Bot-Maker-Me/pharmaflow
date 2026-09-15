@@ -5,7 +5,7 @@
 - `drugs`
   - `id` (uuid, primary key, auto-generated)
   - `user_id` (uuid, not null, defaults to auth.uid(), references auth.users with cascade delete)
-  - `din` (text, not null — 8-digit Drug Identification Number)
+  - `din` (text, not null — 6-10 digit Drug Identification Number)
   - `description` (text, not null — drug name/description)
   - `schedule` (text, not null — one of: Narcotic, Controlled, Targeted, Verify)
   - `pack_size` (integer, not null — number of units per pack)
@@ -39,11 +39,11 @@ CREATE TABLE IF NOT EXISTS drugs (
   din text NOT NULL,
   description text NOT NULL,
   schedule text NOT NULL CHECK (schedule IN ('Narcotic', 'Controlled', 'Targeted', 'Verify')),
-  pack_size integer NOT NULL CHECK (pack_size > 0),
+  pack_size integer NOT NULL DEFAULT 1 CHECK (pack_size > 0),
   reorder_level integer NOT NULL DEFAULT 0 CHECK (reorder_level >= 0),
   created_at timestamptz DEFAULT now(),
   UNIQUE (user_id, din),
-  CHECK (din ~ '^[0-9]{8}$')
+  CHECK (din ~ '^[0-9]{6,10}$')
 );
 
 ALTER TABLE drugs ENABLE ROW LEVEL SECURITY;
