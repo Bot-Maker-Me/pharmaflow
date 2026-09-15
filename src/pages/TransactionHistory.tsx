@@ -7,8 +7,11 @@ import {
   ChevronRight,
   AlertTriangle,
   Clock,
+  Search,
+  Filter,
+  X,
 } from 'lucide-react';
-import { useTransactions } from '@/hooks/useTransactions';
+import { useTransactions, useFilteredTransactions } from '@/hooks/useTransactions';
 import type { TransactionType } from '@/types/transaction';
 
 const PAGE_SIZE = 10;
@@ -40,6 +43,7 @@ function SkeletonRow() {
       <td className="px-4 py-3.5"><div className="h-4 w-32 animate-pulse rounded bg-neutral-100" /></td>
       <td className="px-4 py-3.5"><div className="h-4 w-12 animate-pulse rounded bg-neutral-100" /></td>
       <td className="px-4 py-3.5"><div className="h-4 w-24 animate-pulse rounded bg-neutral-100" /></td>
+      <td className="px-4 py-3.5"><div className="h-4 w-32 animate-pulse rounded bg-neutral-100" /></td>
       <td className="px-4 py-3.5"><div className="h-4 w-28 animate-pulse rounded bg-neutral-100" /></td>
     </tr>
   );
@@ -47,13 +51,39 @@ function SkeletonRow() {
 
 export default function TransactionHistory() {
   const [page, setPage] = useState(0);
-  const { data, isLoading, isError, refetch } = useTransactions(page);
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState<TransactionType | ''>('');
+  const [sourceFilter, setSourceFilter] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+
+  const { data, isLoading, isError, refetch } = useFilteredTransactions({
+    page,
+    search: search || undefined,
+    type: typeFilter || undefined,
+    source: sourceFilter || undefined,
+    startDate: startDate || undefined,
+    endDate: endDate || undefined,
+  });
 
   const transactions = data?.data ?? [];
   const totalCount = data?.count ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
   const hasNext = page < totalPages - 1;
   const hasPrev = page > 0;
+
+  const clearFilters = () => {
+    setSearch('');
+    setTypeFilter('');
+    setSourceFilter('');
+    setStartDate('');
+    setEndDate('');
+    setPage(0);
+    setShowFilters(false);
+  };
+
+  const hasActiveFilters = search || typeFilter || sourceFilter || startDate || endDate;
 
   return (
     <div>
@@ -62,6 +92,123 @@ export default function TransactionHistory() {
         <p className="mt-1 text-sm text-neutral-500">
           All inventory transactions ({totalCount} total)
         </p>
+      </div>
+
+      {/* Search and Filters */}
+      <div className="mb-6 space-y-4">
+        <div className="flex gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+            <input
+              type="text"
+              placeholder="Search by DIN or drug description..."
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(0);
+              }}
+              className="w-full rounded-lg border border-neutral-200 pl-10 pr-4 py-2.5 text-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
+            />
+          </div>
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
+              showFilters || hasActiveFilters
+                ? 'border-primary-400 bg-primary-50 text-primary-700'
+                : 'border-neutral-200 text-neutral-600 hover:bg-neutral-50'
+            }`}
+          >
+            <Filter className="h-4 w-4" />
+            Filters
+            {hasActiveFilters && (
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary-600 text-xs text-white">
+                {[search, typeFilter, sourceFilter, startDate, endDate].filter(Boolean).length}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {showFilters && (
+          <div className="card p-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-neutral-700">Transaction Type</label>
+                <select
+                  value={typeFilter}
+                  onChange={(e) => {
+                    setTypeFilter(e.target.value as TransactionType | '');
+                    setPage(0);
+                  }}
+                  className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                >
+                  <option value="">All Types</option>
+                  <option value="PURCHASE">Purchase</option>
+                  <option value="DISPENSE">Dispense</option>
+                  <option value="ADJUSTMENT">Adjustment</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-neutral-700">Source</label>
+                <select
+                  value={sourceFilter}
+                  onChange={(e) => {
+                    setSourceFilter(e.target.value);
+                    setPage(0);
+                  }}
+                  className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                >
+                  <option value="">All Sources</option>
+                  <option value="purchase_import">Purchase Import</option>
+                  <option value="dispense_import">Dispense Import</option>
+                  <option value="destruction_import">Destruction Import</option>
+                  <option value="manual">Manual Entry</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-neutral-700">Start Date</label>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => {
+                    setStartDate(e.target.value);
+                    setPage(0);
+                  }}
+                  className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-neutral-700">End Date</label>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => {
+                    setEndDate(e.target.value);
+                    setPage(0);
+                  }}
+                  className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                />
+              </div>
+            </div>
+
+            {hasActiveFilters && (
+              <div className="mt-4 flex items-center justify-between">
+                <p className="text-xs text-neutral-500">
+                  {totalCount} transactions match your filters
+                </p>
+                <button
+                  onClick={clearFilters}
+                  className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-neutral-600 transition-colors hover:bg-neutral-100"
+                >
+                  <X className="h-3 w-3" />
+                  Clear all filters
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="card overflow-hidden">
@@ -85,6 +232,7 @@ export default function TransactionHistory() {
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">Drug</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">DIN</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">Qty</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">Source</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">Notes</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">Date</th>
                 </tr>
@@ -126,6 +274,14 @@ export default function TransactionHistory() {
                           </span>
                         </td>
                         <td className="px-4 py-3">
+                          <span className="text-xs text-neutral-500">
+                            {tx.source === 'purchase_import' ? 'Purchase Import' :
+                             tx.source === 'dispense_import' ? 'Dispense Import' :
+                             tx.source === 'destruction_import' ? 'Destruction Import' :
+                             tx.source === 'manual' ? 'Manual' : tx.source}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
                           <span className="text-sm text-neutral-500">
                             {tx.notes || <span className="text-neutral-300">—</span>}
                           </span>
@@ -142,9 +298,13 @@ export default function TransactionHistory() {
             {!isLoading && transactions.length === 0 && (
               <div className="py-16 text-center">
                 <Clock className="mx-auto h-10 w-10 text-neutral-300" />
-                <p className="mt-3 text-sm text-neutral-400">No transactions yet</p>
+                <p className="mt-3 text-sm text-neutral-400">
+                  {hasActiveFilters ? 'No transactions match your filters' : 'No transactions yet'}
+                </p>
                 <p className="mt-1 text-xs text-neutral-400">
-                  Add purchases or reduce stock from the Inventory page to see transactions here
+                  {hasActiveFilters
+                    ? 'Try adjusting your filters or search terms'
+                    : 'Upload purchase or dispensing records to see transactions here'}
                 </p>
               </div>
             )}

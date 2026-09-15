@@ -4,18 +4,53 @@ import type { InventoryTransaction, TransactionInput, TransactionWithDrug } from
 
 const PAGE_SIZE = 10;
 
-async function fetchTransactions(page: number): Promise<{
+interface FetchParams {
+  page: number;
+  search?: string;
+  type?: TransactionType;
+  source?: string;
+  startDate?: string;
+  endDate?: string;
+}
+
+async function fetchTransactions(params: FetchParams): Promise<{
   data: TransactionWithDrug[];
   count: number;
 }> {
+  const { page, search, type, source, startDate, endDate } = params;
   const from = page * PAGE_SIZE;
   const to = from + PAGE_SIZE - 1;
 
-  const { data, error, count } = await supabase
+  let query = supabase
     .from('inventory_transactions')
     .select('*, drugs!inner(description, din)', { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(from, to);
+
+  // Apply search filter
+  if (search) {
+    query = query.or(`drugs.din.ilike.%${search}%,drugs.description.ilike.%${search}%`);
+  }
+
+  // Apply type filter
+  if (type) {
+    query = query.eq('type', type);
+  }
+
+  // Apply source filter
+  if (source) {
+    query = query.eq('source', source);
+  }
+
+  // Apply date range filter
+  if (startDate) {
+    query = query.gte('created_at', startDate);
+  }
+  if (endDate) {
+    query = query.lte('created_at', endDate);
+  }
+
+  const { data, error, count } = await query;
 
   if (error) throw error;
 
@@ -55,7 +90,15 @@ async function addTransaction(input: TransactionInput): Promise<InventoryTransac
 export function useTransactions(page: number) {
   return useQuery({
     queryKey: ['transactions', page],
-    queryFn: () => fetchTransactions(page),
+    queryFn: () => fetchTransactions({ page }),
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useFilteredTransactions(params: FetchParams) {
+  return useQuery({
+    queryKey: ['transactions', 'filtered', params],
+    queryFn: () => fetchTransactions(params),
     placeholderData: (prev) => prev,
   });
 }
