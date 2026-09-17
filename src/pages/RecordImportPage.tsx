@@ -187,7 +187,7 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
       const result: SaveResult = await saveMutation.mutateAsync({ records, fileName });
       
       if (result.errors.length > 0) {
-        toast.error(`Saved ${result.saved} records, ${result.skipped} failed. Check console for details.`);
+        toast.error(`Saved ${result.saved} records, ${result.skipped} failed. Some drugs may already exist in inventory.`);
         console.error('Save errors:', result.errors);
       } else {
         toast.success(`Saved ${result.saved} records${result.skipped ? ` (${result.skipped} skipped)` : ''}`);

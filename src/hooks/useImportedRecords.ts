@@ -71,6 +71,27 @@ async function ensureDrugId(din: string, description?: string): Promise<string> 
     .single();
 
   if (createError) {
+    // Handle duplicate key error - drug might have been created by another request
+    if (createError.code === '23505' || createError.message.includes('duplicate key')) {
+      console.log(`Drug ${normalizedDin} already exists (race condition), re-querying...`);
+      const { data: retryExisting, error: retryError } = await supabase
+        .from('drugs')
+        .select('id')
+        .eq('din', normalizedDin)
+        .limit(1);
+      
+      if (retryError) {
+        console.error('Error re-querying drug after duplicate:', retryError);
+        throw new Error(`Failed to lookup drug ${normalizedDin} after duplicate: ${retryError.message}`);
+      }
+      
+      if (retryExisting?.[0]?.id) {
+        return retryExisting[0].id;
+      }
+      
+      throw new Error(`Drug ${normalizedDin} appears to exist but could not be found after duplicate error`);
+    }
+    
     console.error('Error creating drug:', createError);
     throw new Error(`Failed to create drug ${normalizedDin}: ${createError.message}`);
   }
