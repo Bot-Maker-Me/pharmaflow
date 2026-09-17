@@ -152,7 +152,7 @@ function detectDateRange(rows: ParsedRow[]): { start: Date | null; end: Date | n
   if (rows.length === 0) return { start: null, end: null };
   
   const keys = Object.keys(rows[0]);
-  const dateKey = findColumnKey(keys, ['Date', 'Transaction Date', 'Invoice Date', 'Order Date', 'Timestamp', 'Time']);
+  const dateKey = findColumnKey(keys, ['Date', 'Transaction Date', 'Invoice Date', 'Order Date', 'Timestamp', 'Time', 'Day', 'FillDate', 'First FillDate', 'Fill Date', 'First Fill Date']);
   
   if (!dateKey) return { start: null, end: null };
   
@@ -208,7 +208,7 @@ function aggregateRows(
     ? findColumnKey(keys, ['Quantity', 'Qty', 'Received', 'Purchased', 'Shipped'])
     : findColumnKey(keys, ['Quantity', 'Qty', 'Dispensed', 'Filled', 'Count']);
   const typeKey = findColumnKey(keys, ['Type', 'Transaction Type', 'Action', 'Direction']);
-  const dateKey = findColumnKey(keys, ['Date', 'Transaction Date', 'Invoice Date', 'Order Date', 'Timestamp', 'Time']);
+  const dateKey = findColumnKey(keys, ['Date', 'Transaction Date', 'Invoice Date', 'Order Date', 'Timestamp', 'Time', 'Day', 'FillDate', 'First FillDate', 'Fill Date', 'First Fill Date']);
   // More specific drug description column names to avoid picking up patient names
   const descKey = findColumnKey(keys, ['Drug Description', 'Product Name', 'Drug Name', 'Description', 'Product', 'Medication']);
   // Pack size column for multiplying quantity
