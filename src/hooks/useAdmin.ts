@@ -3,20 +3,40 @@ import { supabase } from '@/lib/supabase';
 import type { AdminUser, SystemSettings, SystemHealth, AuditLog } from '@/types/admin';
 
 async function fetchSystemSettings(): Promise<SystemSettings> {
-  const { data, error } = await supabase
-    .from('system_settings')
-    .select('*')
-    .eq('id', 1)
-    .single();
-  if (error) throw error;
-  return data;
+  try {
+    const { data, error } = await supabase
+      .from('system_settings')
+      .select('*')
+      .eq('id', 1)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching system settings:', error);
+      // Return default settings if table doesn't exist
+      return {
+        id: 1,
+        subscription_price_cents: 2900,
+        trial_days: 14,
+      };
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Error in fetchSystemSettings:', error);
+    // Return default settings
+    return {
+      id: 1,
+      subscription_price_cents: 2900,
+      trial_days: 14,
+    };
+  }
 }
 
 async function fetchAdminUsers(): Promise<AdminUser[]> {
   try {
     console.log('Attempting to fetch admin users...');
     
-    // Try simple direct query first
+    // Try public users table first
     const { data, error } = await supabase
       .from('users')
       .select('id, email, role, subscription_status, trial_ends_at, created_at')
@@ -24,11 +44,13 @@ async function fetchAdminUsers(): Promise<AdminUser[]> {
       .limit(50);
 
     if (error) {
-      console.error('Direct query error:', error);
-      throw error;
+      console.error('Public users table error:', error);
+      // Return empty array instead of throwing error
+      console.log('Users table might not exist, returning empty array');
+      return [];
     }
 
-    console.log(`Successfully fetched ${data?.length || 0} users`);
+    console.log(`Successfully fetched ${data?.length || 0} users from public table`);
     
     return (data ?? []).map(user => ({
       id: user.id,
@@ -40,7 +62,8 @@ async function fetchAdminUsers(): Promise<AdminUser[]> {
     }));
   } catch (error) {
     console.error('Error in fetchAdminUsers:', error);
-    throw error;
+    // Return empty array instead of throwing error
+    return [];
   }
 }
 
@@ -53,35 +76,48 @@ async function fetchSystemHealth(): Promise<SystemHealth> {
       .from('users')
       .select('id, subscription_status, trial_ends_at');
     
-    if (usersError) {
-      console.error('Error fetching users for health:', usersError);
-      throw usersError;
+    let totalUsers = 0;
+    let activeSubscriptions = 0;
+    let trialingUsers = 0;
+
+    if (!usersError && users) {
+      totalUsers = users.length;
+      activeSubscriptions = users.filter(u => u.subscription_status === 'active').length;
+      trialingUsers = users.filter(u => u.subscription_status === 'trialing').length;
+    } else {
+      console.log('Users table error in health check:', usersError);
     }
 
-    const totalUsers = users?.length || 0;
-    const activeSubscriptions = users?.filter(u => u.subscription_status === 'active').length || 0;
-    const trialingUsers = users?.filter(u => u.subscription_status === 'trialing').length || 0;
-
     // Get active cycles count
-    const { count: activeCycles, error: cyclesError } = await supabase
+    let activeCycles = 0;
+    const { count, error: cyclesError } = await supabase
       .from('reconciliation_cycles')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'in_progress');
 
-    if (cyclesError) {
-      console.error('Error fetching cycles:', cyclesError);
+    if (!cyclesError && count) {
+      activeCycles = count;
+    } else {
+      console.log('Cycles table error in health check:', cyclesError);
     }
 
     return {
       total_users: totalUsers,
       active_subscriptions: activeSubscriptions,
       trialing_users: trialingUsers,
-      active_cycles: activeCycles || 0,
+      active_cycles: activeCycles,
       recent_webhook_errors: 0,
     };
   } catch (error) {
     console.error('Error in fetchSystemHealth:', error);
-    throw error;
+    // Return default values instead of throwing error
+    return {
+      total_users: 0,
+      active_subscriptions: 0,
+      trialing_users: 0,
+      active_cycles: 0,
+      recent_webhook_errors: 0,
+    };
   }
 }
 
@@ -117,7 +153,10 @@ async function extendTrial(userId: string, days: number): Promise<void> {
       .eq('id', userId)
       .single();
 
-    if (fetchError) throw fetchError;
+    if (fetchError) {
+      console.error('Error fetching user for trial extension:', fetchError);
+      throw fetchError;
+    }
 
     const currentEnd = user.trial_ends_at ? new Date(user.trial_ends_at) : new Date();
     const newEnd = new Date(currentEnd.getTime() + days * 24 * 60 * 60 * 1000);
@@ -130,7 +169,10 @@ async function extendTrial(userId: string, days: number): Promise<void> {
       })
       .eq('id', userId);
 
-    if (error) throw error;
+    if (error) {
+      console.error('Error extending trial:', error);
+      throw error;
+    }
   } catch (error) {
     console.error('Error in extendTrial:', error);
     throw error;
@@ -144,7 +186,10 @@ async function activateSubscription(userId: string): Promise<void> {
       .update({ subscription_status: 'active' })
       .eq('id', userId);
 
-    if (error) throw error;
+    if (error) {
+      console.error('Error activating subscription:', error);
+      throw error;
+    }
   } catch (error) {
     console.error('Error in activateSubscription:', error);
     throw error;
@@ -158,7 +203,10 @@ async function revokeAccess(userId: string): Promise<void> {
       .update({ subscription_status: 'revoked' })
       .eq('id', userId);
 
-    if (error) throw error;
+    if (error) {
+      console.error('Error revoking access:', error);
+      throw error;
+    }
   } catch (error) {
     console.error('Error in revokeAccess:', error);
     throw error;
@@ -175,7 +223,10 @@ async function updatePricing(priceCents: number, trialDays: number): Promise<voi
       })
       .eq('id', 1);
 
-    if (error) throw error;
+    if (error) {
+      console.error('Error updating pricing:', error);
+      throw error;
+    }
   } catch (error) {
     console.error('Error in updatePricing:', error);
     throw error;

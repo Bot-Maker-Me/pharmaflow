@@ -22,37 +22,38 @@ async function fetchTransactions(params: FetchParams): Promise<{
   const to = from + PAGE_SIZE - 1;
 
   try {
+    console.log('Fetching transactions with params:', { page, search, type, source, startDate, endDate });
+
+    // Start with basic query without filters
     let query = supabase
       .from('inventory_transactions')
-      .select('*, drugs!inner(description, din)', { count: 'exact' })
+      .select('*, drugs(description, din)', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(from, to);
 
-    // Apply search filter
+    // Apply search filter - simplified
     if (search) {
       query = query.or(`drugs.din.ilike.%${search}%,drugs.description.ilike.%${search}%`);
     }
 
-    // Apply type filter (handle both 'type' and 'transaction_type' column names)
+    // Apply type filter - simplified
     if (type) {
-      query = query.or(`transaction_type.eq.${type},type.eq.${type}`);
+      query = query.eq('transaction_type', type);
     }
 
-    // Apply source filter
+    // Apply source filter - simplified
     if (source) {
       query = query.eq('source', source);
     }
 
-    // Apply date range filter (handle both 'date' and 'created_at' column names)
+    // Apply date range filter - simplified
     if (startDate) {
-      // Ensure proper ISO date format
       const startISO = new Date(startDate).toISOString();
-      query = query.or(`created_at.gte.${startISO},date.gte.${startISO}`);
+      query = query.gte('created_at', startISO);
     }
     if (endDate) {
-      // Add one day to end date to include the entire end day
       const endISO = new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1)).toISOString();
-      query = query.or(`created_at.lt.${endISO},date.lt.${endISO}`);
+      query = query.lt('created_at', endISO);
     }
 
     const { data, error, count } = await query;
@@ -62,18 +63,20 @@ async function fetchTransactions(params: FetchParams): Promise<{
       throw error;
     }
 
+    console.log(`Successfully fetched ${data?.length || 0} transactions, total count: ${count}`);
+
     return {
       data: (data ?? []).map((row) => {
-        const drug = row.drugs as unknown as { description: string; din: string };
+        const drug = row.drugs as any;
         return {
           id: row.id,
           user_id: row.user_id,
           drug_id: row.drug_id,
-          type: (row as any).transaction_type || row.type,
+          type: row.transaction_type || row.type,
           quantity: row.quantity,
           notes: row.notes,
-          source: (row as any).source,
-          created_at: (row as any).date || row.created_at,
+          source: row.source,
+          created_at: row.date || row.created_at,
           drug_description: drug?.description ?? 'Unknown',
           drug_din: drug?.din ?? '--------',
         } as TransactionWithDrug;
