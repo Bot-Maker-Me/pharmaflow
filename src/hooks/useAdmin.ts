@@ -13,6 +13,7 @@ async function fetchSystemSettings(): Promise<SystemSettings> {
     if (error) {
       console.error('Error fetching system settings:', error);
       // Return default settings if table doesn't exist
+      console.log('Using default system settings');
       return {
         id: 1,
         subscription_price_cents: 2900,
@@ -24,6 +25,7 @@ async function fetchSystemSettings(): Promise<SystemSettings> {
   } catch (error) {
     console.error('Error in fetchSystemSettings:', error);
     // Return default settings
+    console.log('Using default system settings due to error');
     return {
       id: 1,
       subscription_price_cents: 2900,

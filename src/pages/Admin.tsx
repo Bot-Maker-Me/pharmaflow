@@ -153,6 +153,7 @@ function UsersTab() {
       <div className="card p-12 text-center">
         <AlertTriangle className="mx-auto h-10 w-10 text-error-300" />
         <p className="mt-3 text-sm text-neutral-500">Failed to load users</p>
+        <p className="mt-1 text-xs text-neutral-400">The users table may not exist in your database</p>
         <button onClick={() => refetch()} className="btn-secondary mt-3">
           Try again
         </button>

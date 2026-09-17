@@ -217,6 +217,7 @@ export default function TransactionHistory() {
           <div className="py-12 text-center">
             <AlertTriangle className="mx-auto h-10 w-10 text-error-300" />
             <p className="mt-3 text-sm text-neutral-500">Failed to load transactions</p>
+            <p className="mt-1 text-xs text-neutral-400">Check console for error details</p>
             <button onClick={() => refetch()} className="btn-secondary mt-3">
               Try again
             </button>
