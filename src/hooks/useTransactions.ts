@@ -37,9 +37,9 @@ async function fetchTransactions(params: FetchParams): Promise<{
     query = query.or(`transaction_type.eq.${type},type.eq.${type}`);
   }
 
-  // Apply source filter (handle both 'source' column and case-insensitive matching)
+  // Apply source filter
   if (source) {
-    query = query.ilike('source', source);
+    query = query.eq('source', source);
   }
 
   // Apply date range filter (handle both 'date' and 'created_at' column names)
