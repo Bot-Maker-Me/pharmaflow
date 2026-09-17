@@ -128,57 +128,103 @@ async function saveImportedRecords({
 
   console.log(`Starting to save ${records.length} ${kind} records...`);
 
-  for (const record of records) {
+  // Filter out invalid records first
+  const validRecords = records.filter(record => {
+    const qty = quantityForKind(kind, record);
+    return record.din && qty > 0;
+  });
+
+  console.log(`Filtered to ${validRecords.length} valid records out of ${records.length} total`);
+  skipped = records.length - validRecords.length;
+
+  if (validRecords.length === 0) {
+    console.log('No valid records to save');
+    return { saved: 0, skipped, errors };
+  }
+
+  // Batch process: First ensure all drug IDs exist
+  const drugIdMap = new Map<string, string>();
+  const uniqueDins = [...new Set(validRecords.map(r => r.din))];
+  
+  console.log(`Ensuring ${uniqueDins.length} unique drug IDs exist...`);
+  
+  for (const din of uniqueDins) {
     try {
-      const qty = quantityForKind(kind, record);
-      if (!record.din || qty === 0) {
-        console.log(`Skipping record with invalid DIN or zero quantity: ${record.din}`);
-        skipped += 1;
-        continue;
-      }
-
-      console.log(`Processing DIN ${record.din} with quantity ${qty}`);
-      const drugId = await ensureDrugId(record.din, record.description);
-      const signedQty = config.type === 'PURCHASE' ? qty : -qty;
-
-      // Use the date from the transaction data if available, otherwise use current date
-      let transactionDate = new Date().toISOString();
-      if (record.transactions && record.transactions.length > 0) {
-        // Use the first transaction's date, or the most recent one
-        const validTransactions = record.transactions.filter(t => t.date !== null);
-        if (validTransactions.length > 0) {
-          // Sort by date and use the most recent transaction date
-          validTransactions.sort((a, b) => {
-            if (!a.date || !b.date) return 0;
-            return new Date(b.date).getTime() - new Date(a.date).getTime();
-          });
-          transactionDate = new Date(validTransactions[0].date!).toISOString();
-          console.log(`Using transaction date from file: ${transactionDate}`);
-        }
-      }
-
-      const { error: txError } = await supabase.from('inventory_transactions').insert({
-        drug_id: drugId,
-        transaction_type: config.type,
-        quantity: signedQty,
-        date: transactionDate,
-        file_name: fileName,
-      });
-
-      if (txError) {
-        console.error(`Error saving transaction for DIN ${record.din}:`, txError);
-        errors.push(`DIN ${record.din}: ${txError.message}`);
-        skipped += 1;
-      } else {
-        console.log(`Successfully saved transaction for DIN ${record.din}`);
-        saved += 1;
-      }
+      const record = validRecords.find(r => r.din === din);
+      const drugId = await ensureDrugId(din, record?.description);
+      drugIdMap.set(din, drugId);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      console.error(`Error processing record DIN ${record.din}:`, errorMessage);
-      errors.push(`DIN ${record.din}: ${errorMessage}`);
-      skipped += 1;
+      console.error(`Error ensuring drug ID for DIN ${din}:`, errorMessage);
+      errors.push(`DIN ${din}: ${errorMessage}`);
+      // Remove records with this DIN from valid records
+      const index = validRecords.findIndex(r => r.din === din);
+      if (index !== -1) {
+        validRecords.splice(index, 1);
+        skipped += 1;
+      }
     }
+  }
+
+  console.log(`Drug IDs ensured. Preparing ${validRecords.length} transactions for batch insert...`);
+
+  // Prepare all transactions for batch insert
+  const transactions = validRecords.map(record => {
+    const qty = quantityForKind(kind, record);
+    const drugId = drugIdMap.get(record.din);
+    const signedQty = config.type === 'PURCHASE' ? qty : -qty;
+
+    // Use the date from the transaction data if available, otherwise use current date
+    let transactionDate = new Date().toISOString();
+    if (record.transactions && record.transactions.length > 0) {
+      const validTransactions = record.transactions.filter(t => t.date !== null);
+      if (validTransactions.length > 0) {
+        validTransactions.sort((a, b) => {
+          if (!a.date || !b.date) return 0;
+          return new Date(b.date).getTime() - new Date(a.date).getTime();
+        });
+        transactionDate = new Date(validTransactions[0].date!).toISOString();
+      }
+    }
+
+    return {
+      drug_id: drugId,
+      transaction_type: config.type,
+      quantity: signedQty,
+      date: transactionDate,
+      file_name: fileName,
+    };
+  });
+
+  // Batch insert all transactions
+  console.log(`Inserting ${transactions.length} transactions in batch...`);
+  const { error: txError } = await supabase.from('inventory_transactions').insert(transactions);
+
+  if (txError) {
+    console.error('Batch insert error:', txError);
+    // If batch insert fails, fall back to individual inserts
+    console.log('Falling back to individual inserts...');
+    
+    for (const transaction of transactions) {
+      try {
+        const { error: individualError } = await supabase.from('inventory_transactions').insert(transaction);
+        if (individualError) {
+          console.error(`Error saving individual transaction:`, individualError);
+          errors.push(`Transaction error: ${individualError.message}`);
+          skipped += 1;
+        } else {
+          saved += 1;
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+        console.error(`Error in individual insert:`, errorMessage);
+        errors.push(`Transaction error: ${errorMessage}`);
+        skipped += 1;
+      }
+    }
+  } else {
+    saved = transactions.length;
+    console.log(`Successfully saved ${saved} transactions in batch`);
   }
 
   console.log(`Save complete: ${saved} saved, ${skipped} skipped, ${errors.length} errors`);
