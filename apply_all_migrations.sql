@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS drugs (
 ALTER TABLE drugs ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Users can view own drugs" ON drugs;
-CREATE POLICY "Users can view own drugs" ON drugs FOR SELECT
-  TO authenticated USING (auth.uid() = user_id);
+CREATE POLICY "Users can view all drugs" ON drugs FOR SELECT
+  TO authenticated USING (true);
 
 DROP POLICY IF EXISTS "Users can insert own drugs" ON drugs;
 CREATE POLICY "Users can insert own drugs" ON drugs FOR INSERT
