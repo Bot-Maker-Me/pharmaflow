@@ -141,11 +141,27 @@ async function saveImportedRecords({
       const drugId = await ensureDrugId(record.din, record.description);
       const signedQty = config.type === 'PURCHASE' ? qty : -qty;
 
+      // Use the date from the transaction data if available, otherwise use current date
+      let transactionDate = new Date().toISOString();
+      if (record.transactions && record.transactions.length > 0) {
+        // Use the first transaction's date, or the most recent one
+        const validTransactions = record.transactions.filter(t => t.date !== null);
+        if (validTransactions.length > 0) {
+          // Sort by date and use the most recent transaction date
+          validTransactions.sort((a, b) => {
+            if (!a.date || !b.date) return 0;
+            return new Date(b.date).getTime() - new Date(a.date).getTime();
+          });
+          transactionDate = new Date(validTransactions[0].date!).toISOString();
+          console.log(`Using transaction date from file: ${transactionDate}`);
+        }
+      }
+
       const { error: txError } = await supabase.from('inventory_transactions').insert({
         drug_id: drugId,
         transaction_type: config.type,
         quantity: signedQty,
-        date: new Date().toISOString(),
+        date: transactionDate,
         file_name: fileName,
       });
 
