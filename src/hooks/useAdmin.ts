@@ -13,9 +13,31 @@ async function fetchSystemSettings(): Promise<SystemSettings> {
 }
 
 async function fetchAdminUsers(): Promise<AdminUser[]> {
-  const { data, error } = await supabase.rpc('admin_list_users');
+  try {
+    // Try RPC function first
+    const { data, error } = await supabase.rpc('admin_list_users');
+    if (!error && data) {
+      return data;
+    }
+  } catch (err) {
+    console.log('RPC function not available, falling back to direct query');
+  }
+
+  // Fallback to direct query if RPC fails
+  const { data, error } = await supabase
+    .from('users')
+    .select('id, email, role, subscription_status, trial_ends_at, created_at')
+    .order('created_at', { ascending: false });
+
   if (error) throw error;
-  return data ?? [];
+  return (data ?? []).map(user => ({
+    id: user.id,
+    email: user.email,
+    role: user.role || 'user',
+    subscription_status: user.subscription_status || 'none',
+    trial_ends_at: user.trial_ends_at,
+    created_at: user.created_at,
+  }));
 }
 
 async function fetchSystemHealth(): Promise<SystemHealth> {

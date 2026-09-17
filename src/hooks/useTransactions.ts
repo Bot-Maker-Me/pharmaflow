@@ -34,20 +34,24 @@ async function fetchTransactions(params: FetchParams): Promise<{
 
   // Apply type filter (handle both 'type' and 'transaction_type' column names)
   if (type) {
-    query = query.or(`type.eq.${type},transaction_type.eq.${type}`);
+    query = query.or(`transaction_type.eq.${type},type.eq.${type}`);
   }
 
-  // Apply source filter
+  // Apply source filter (handle both 'source' column and case-insensitive matching)
   if (source) {
-    query = query.eq('source', source);
+    query = query.ilike('source', source);
   }
 
   // Apply date range filter (handle both 'date' and 'created_at' column names)
   if (startDate) {
-    query = query.or(`created_at.gte.${startDate},date.gte.${startDate}`);
+    // Ensure proper ISO date format
+    const startISO = new Date(startDate).toISOString();
+    query = query.or(`created_at.gte.${startISO},date.gte.${startISO}`);
   }
   if (endDate) {
-    query = query.or(`created_at.lte.${endDate},date.lte.${endDate}`);
+    // Add one day to end date to include the entire end day
+    const endISO = new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1)).toISOString();
+    query = query.or(`created_at.lt.${endISO},date.lt.${endISO}`);
   }
 
   const { data, error, count } = await query;
