@@ -24,7 +24,7 @@ import { motion } from 'framer-motion';
 const baseNavItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/transactions', label: 'Transactions', icon: Receipt },
-  { to: '/reconciliation', label: 'Reconciliation', icon: Scale },
+  { to: '/reconciliation', label: 'Manual Reconciliation', icon: Scale },
   { to: '/purchase-records', label: 'Purchase Records', icon: ShoppingCart },
   { to: '/dispensing-records', label: 'Dispensing Records', icon: Activity },
   { to: '/destruction-records', label: 'Destruction Records', icon: Trash2 },
@@ -205,6 +205,22 @@ export default function Layout() {
             </ErrorBoundary>
           </motion.div>
         </main>
+
+        {/* Footer */}
+        <footer className="border-t border-neutral-100 bg-white px-4 py-4 lg:px-8">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-neutral-500">
+            <div className="flex flex-col sm:flex-row items-center gap-2">
+              <p>© {new Date().getFullYear()} PharmaFlow. All rights reserved.</p>
+              <span className="hidden sm:inline">•</span>
+              <p>123 Pharmacy Ave, Toronto, ON M5H 2N2, Canada</p>
+            </div>
+            <div className="flex items-center gap-4">
+              <Link to="/terms" className="hover:text-neutral-700 transition-colors">
+                Terms & Privacy
+              </Link>
+            </div>
+          </div>
+        </footer>
       </div>
     </div>
   );

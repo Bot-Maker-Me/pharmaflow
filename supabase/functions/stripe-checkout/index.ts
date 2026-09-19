@@ -88,13 +88,15 @@ Deno.serve(async (req: Request) => {
       body: new URLSearchParams({
         mode: "subscription",
         customer: customerId,
-        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][currency]": "cad",
         "line_items[0][price_data][recurring][interval]": "month",
         "line_items[0][price_data][unit_amount]": String(priceCents),
         "line_items[0][price_data][product_data][name]": "PharmaFlow Pro",
         "line_items[0][quantity]": "1",
         success_url: `${origin}/dashboard?checkout=success`,
         cancel_url: `${origin}/dashboard?checkout=cancelled`,
+        "subscription_data[description]": `Monthly subscription at $${(priceCents / 100).toFixed(2)} CAD/month. Auto-renews monthly until cancelled. Cancel anytime from Settings. Complies with Canadian consumer protection laws.`,
+        "payment_intent_data[description]": "PharmaFlow Pro Subscription - Canadian users",
       }),
     });
 

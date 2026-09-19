@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Pill, Mail, Lock, Loader2, ArrowRight, CheckCircle2, Building2 } from 'lucide-react';
+import { Pill, Mail, Lock, Loader2, ArrowRight, CheckCircle2, Building2, Check } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
 import { useAuth } from '@/context/AuthContext';
@@ -14,17 +14,19 @@ export default function Signup() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [pharmacyName, setPharmacyName] = useState('');
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
   const [errors, setErrors] = useState<{
     email?: string;
     password?: string;
     confirmPassword?: string;
     pharmacyName?: string;
+    ageConfirmed?: string;
   }>({});
   const [submitting, setSubmitting] = useState(false);
   const [step, setStep] = useState<'form' | 'success'>('form');
 
   const validate = () => {
-    const next: { email?: string; password?: string; confirmPassword?: string; pharmacyName?: string } = {};
+    const next: { email?: string; password?: string; confirmPassword?: string; pharmacyName?: string; ageConfirmed?: string } = {};
     if (!email) next.email = 'Email is required';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) next.email = 'Enter a valid email address';
     if (!password) next.password = 'Password is required';
@@ -33,6 +35,7 @@ export default function Signup() {
     else if (password !== confirmPassword) next.confirmPassword = 'Passwords do not match';
     if (!pharmacyName) next.pharmacyName = 'Pharmacy name is required';
     else if (pharmacyName.length < 2) next.pharmacyName = 'Pharmacy name must be at least 2 characters';
+    if (!ageConfirmed) next.ageConfirmed = 'You must confirm you are at least 13 years old';
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -197,6 +200,32 @@ export default function Signup() {
                 <p className="mt-1 text-xs text-error-600">{errors.confirmPassword}</p>
               )}
             </div>
+
+            <div className="flex items-start gap-3">
+              <div className="relative flex items-center">
+                <input
+                  id="ageConfirmed"
+                  type="checkbox"
+                  checked={ageConfirmed}
+                  onChange={(e) => setAgeConfirmed(e.target.checked)}
+                  className="peer h-4 w-4 cursor-pointer appearance-none rounded border border-neutral-300 checked:border-primary-600 checked:bg-primary-600 focus:ring-2 focus:ring-primary-500 focus:ring-offset-0"
+                />
+                <Check className="pointer-events-none absolute left-0.5 top-0.5 h-3 w-3 text-white opacity-0 peer-checked:opacity-100" />
+              </div>
+              <label htmlFor="ageConfirmed" className="text-sm text-neutral-600 cursor-pointer">
+                I confirm that I am at least 13 years old and agree to the{' '}
+                <Link to="/terms" className="text-primary-600 hover:text-primary-700 underline">
+                  Terms of Service
+                </Link>{' '}
+                and{' '}
+                <Link to="/terms" className="text-primary-600 hover:text-primary-700 underline">
+                  Privacy Policy
+                </Link>
+              </label>
+            </div>
+            {errors.ageConfirmed && (
+              <p className="mt-1 text-xs text-error-600">{errors.ageConfirmed}</p>
+            )}
 
             <button type="submit" disabled={submitting} className="btn-primary w-full">
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

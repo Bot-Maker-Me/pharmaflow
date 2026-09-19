@@ -1,4 +1,4 @@
-import { FileText, Scale, TrendingUp, AlertTriangle, Activity, ShoppingCart, Filter } from 'lucide-react';
+import { FileText, Scale, TrendingUp, AlertTriangle, Filter } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useMemo } from 'react';
 import { usePrescriptions } from '@/hooks/usePrescriptions';
@@ -19,27 +19,40 @@ export default function Dashboard() {
   const activePrescriptions = prescriptions?.filter((p) => p.status === 'active').length ?? 0;
   const activeCycles = cycles?.filter((c) => c.status === 'in_progress').length ?? 0;
   const completedCycles = cycles?.filter((c) => c.status === 'completed').length ?? 0;
-  const pendingDispenses = prescriptions?.filter((p) => p.quantity_dispensed < p.quantity_prescribed).length ?? 0;
 
   const recentActivity = useMemo(() => {
     if (prescriptionsLoading || cyclesLoading) return [];
     
     const activities: Array<{
-      type: 'reconciliation' | 'prescription' | 'dispense';
+      type: 'reconciliation' | 'prescription';
       message: string;
       time: Date;
       icon: typeof Scale;
     }> = [];
     
-    // Add reconciliation completions
-    cycles?.filter(c => c.status === 'completed').slice(0, 3).forEach(cycle => {
+    // Add latest completed reconciliation cycle count
+    const completedCycles = cycles?.filter(c => c.status === 'completed') ?? [];
+    const pendingCycles = cycles?.filter(c => c.status === 'in_progress') ?? [];
+    
+    if (completedCycles.length > 0) {
+      const latestCompleted = completedCycles.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
       activities.push({
         type: 'reconciliation',
-        message: `Reconciliation cycle completed`,
-        time: new Date(cycle.created_at),
+        message: `${completedCycles.length} manual reconciliation cycle${completedCycles.length > 1 ? 's' : ''} completed`,
+        time: new Date(latestCompleted.created_at),
         icon: Scale,
       });
-    });
+    }
+    
+    if (pendingCycles.length > 0) {
+      const latestPending = pendingCycles.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+      activities.push({
+        type: 'reconciliation',
+        message: `${pendingCycles.length} manual reconciliation cycle${pendingCycles.length > 1 ? 's' : ''} pending`,
+        time: new Date(latestPending.created_at),
+        icon: Scale,
+      });
+    }
     
     // Add recent prescriptions
     prescriptions?.slice(0, 3).forEach(rx => {
@@ -51,24 +64,12 @@ export default function Dashboard() {
       });
     });
     
-    // Add dispense activities from reconciliation items
-    allReconciliationItems?.slice(0, 3).forEach(item => {
-      if (item.dispensed_count > 0) {
-        activities.push({
-          type: 'dispense',
-          message: `Dispensed ${item.dispensed_count} units of ${item.description}`,
-          time: new Date(item.created_at),
-          icon: Activity,
-        });
-      }
-    });
-    
-    return activities.sort((a, b) => b.time.getTime() - a.time.getTime()).slice(0, 6);
+    return activities.sort((a, b) => b.time.getTime() - a.time.getTime()).slice(0, 5);
   }, [cycles, prescriptions, allReconciliationItems, prescriptionsLoading, cyclesLoading]);
 
   const stats = [
     {
-      label: 'Reconciliation Cycles',
+      label: 'Manual Reconciliation Cycles',
       value: activeCycles,
       change: activeCycles > 0 ? 'In progress' : 'All completed',
       icon: Scale,
@@ -77,7 +78,7 @@ export default function Dashboard() {
       changeText: activeCycles > 0 ? 'text-warning-600' : 'text-success-600',
     },
     {
-      label: 'Completed Reconciliation Cycle',
+      label: 'Completed Manual Reconciliation Cycle',
       value: completedCycles,
       change: completedCycles > 0 ? 'Total completed' : 'No cycles yet',
       icon: FileText,
@@ -234,8 +235,7 @@ export default function Dashboard() {
                   >
                     <div className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
                       activity.type === 'reconciliation' ? 'bg-success-400' :
-                      activity.type === 'prescription' ? 'bg-primary-400' :
-                      'bg-secondary-400'
+                      'bg-primary-400'
                     }`} />
                     <div className="flex-1">
                       <p className="text-sm font-medium text-neutral-800">{activity.message}</p>
@@ -246,13 +246,11 @@ export default function Dashboard() {
                     </div>
                     <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${
                       activity.type === 'reconciliation' ? 'bg-success-50' :
-                      activity.type === 'prescription' ? 'bg-primary-50' :
-                      'bg-secondary-50'
+                      'bg-primary-50'
                     }`}>
                       <Icon className={`h-4 w-4 ${
                         activity.type === 'reconciliation' ? 'text-success-600' :
-                        activity.type === 'prescription' ? 'text-primary-600' :
-                        'text-secondary-600'
+                        'text-primary-600'
                       }`} />
                     </div>
                   </motion.div>
@@ -266,8 +264,7 @@ export default function Dashboard() {
         <div className="card p-6">
           <h2 className="text-lg font-semibold text-neutral-900">Quick Actions</h2>
           <div className="mt-4 space-y-2">
-            <QuickActionLink to="/reconciliation" label="Start Reconciliation" icon={Scale} />
-            <QuickActionLink to="/transactions" label="Manual Adjustment" icon={ShoppingCart} />
+            <QuickActionLink to="/reconciliation" label="Manual Reconciliation" icon={Scale} />
           </div>
         </div>
       </div>

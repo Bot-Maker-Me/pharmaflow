@@ -7,6 +7,7 @@ import AdminRoute from '@/components/AdminRoute';
 import Layout from '@/components/Layout';
 import ErrorFallback from '@/components/ErrorFallback';
 import SubscriptionPaywall from '@/components/SubscriptionPaywall';
+import CookieConsent from '@/components/CookieConsent';
 import Login from '@/pages/Login';
 import Signup from '@/pages/Signup';
 import Landing from '@/pages/Landing';
@@ -17,6 +18,7 @@ import Reconciliation from '@/pages/Reconciliation';
 import Settings from '@/pages/Settings';
 import TransactionHistory from '@/pages/TransactionHistory';
 import Admin from '@/pages/Admin';
+import Terms from '@/pages/Terms';
 import PurchaseRecords from '@/pages/PurchaseRecords';
 import DispensingRecords from '@/pages/DispensingRecords';
 import DestructionRecords from '@/pages/DestructionRecords';
@@ -84,6 +86,7 @@ function AppRoutes() {
         <Route path="/dispensing-records" element={<DispensingRecords />} />
         <Route path="/destruction-records" element={<DestructionRecords />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/terms" element={<Terms />} />
         <Route
           path="/admin"
           element={
@@ -121,6 +124,7 @@ export default function App() {
             error: { iconTheme: { primary: '#ef4444', secondary: '#fff' } },
           }}
         />
+        <CookieConsent />
       </AuthProvider>
     </ErrorBoundary>
   );

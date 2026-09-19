@@ -3,6 +3,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useSystemSettings, useCreateCheckoutSession } from '@/hooks/useAdmin';
 import { hasAccess, formatPrice } from '@/types/admin';
 import toast from 'react-hot-toast';
+import { Link } from 'react-router-dom';
 
 export default function SubscriptionPaywall() {
   const { profile } = useAuth();
@@ -67,6 +68,7 @@ export default function SubscriptionPaywall() {
             </div>
             <h2 className="text-xl font-bold text-neutral-900">{title}</h2>
             <p className="mt-2 text-sm text-neutral-500">{message}</p>
+            <p className="mt-2 text-xs text-neutral-400">Prices in Canadian dollars (CAD).</p>
           </div>
 
           <div className="p-6">
@@ -100,6 +102,19 @@ export default function SubscriptionPaywall() {
                     Transaction history & audit logs
                   </li>
                 </ul>
+                <div className="mt-4 rounded-lg bg-neutral-100 p-3">
+                  <p className="text-xs font-medium text-neutral-700">Subscription Terms:</p>
+                  <p className="mt-1 text-xs text-neutral-600">
+                    • Monthly subscription at {price}/month<br/>
+                    • Auto-renews each month until cancelled<br/>
+                    • Cancel anytime from Settings with no penalty<br/>
+                    • Billing continues until cancellation is processed<br/>
+                    • Canadian taxes (GST/HST) may apply where required
+                  </p>
+                  <Link to="/terms" className="mt-2 block text-xs text-primary-600 hover:text-primary-700 underline">
+                    View full terms and auto-renewal policy
+                  </Link>
+                </div>
               </div>
             )}
 
@@ -134,6 +149,10 @@ export default function SubscriptionPaywall() {
                 })}
               </p>
             )}
+
+            <p className="mt-4 text-center text-xs text-neutral-400">
+              Canadian support available during business hours. Contact us through Settings for assistance.
+            </p>
           </div>
         </div>
       </div>
