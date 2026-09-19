@@ -12,11 +12,11 @@ import {
   FileText as FileIcon,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { parseSingleFileWithPreview, type FilePreview } from '@/lib/fileParser';
+import { parseSingleFileWithIndividualRows, type FilePreview } from '@/lib/fileParser';
 import type { ParsedDinData } from '@/types/reconciliation';
 import {
   useImportedRecords,
-  useSaveImportedRecords,
+  useSaveImportedIndividualRows,
   useDeleteImportedFile,
   type ImportKind,
   type SaveResult,
@@ -57,13 +57,13 @@ export default function UploadFile() {
   const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [parsing, setParsing] = useState(false);
-  const [records, setRecords] = useState<ParsedDinData[]>([]);
+  const [individualRows, setIndividualRows] = useState<Array<{ din: string; description?: string; quantity: number; date: Date | null; type: 'purchase' | 'dispense' }>>([]);
   const [filePreviews, setFilePreviews] = useState<FilePreview[]>([]);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
 
   const currentType = UPLOAD_TYPES.find(t => t.id === selectedType);
   const { data: savedRecords, isLoading: savedLoading } = useImportedRecords(selectedType);
-  const saveMutation = useSaveImportedRecords(selectedType);
+  const saveMutation = useSaveImportedIndividualRows(selectedType);
   const deleteMutation = useDeleteImportedFile(selectedType);
 
   const handleFileDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
@@ -110,35 +110,20 @@ export default function UploadFile() {
     setParsing(true);
     try {
       const seenSignatures = new Set<string>();
-      let allData = new Map<string, any>();
+      let allRows: Array<{ din: string; description?: string; quantity: number; date: Date | null; type: 'purchase' | 'dispense' }> = [];
       let previews: FilePreview[] = [];
 
       for (const file of files) {
-        const { data, preview } = await parseSingleFileWithPreview(file, currentType!.parseSource, undefined, seenSignatures);
-
-        for (const [din, itemData] of data) {
-          const existing = allData.get(din);
-          if (existing) {
-            if (selectedType === 'purchase') {
-              existing.purchased += itemData.purchased;
-            } else {
-              existing.dispensed += itemData.dispensed;
-            }
-            existing.transactions = [...(existing.transactions || []), ...(itemData.transactions || [])];
-          } else {
-            allData.set(din, itemData);
-          }
-        }
-
+        const { data, preview } = await parseSingleFileWithIndividualRows(file, currentType!.parseSource, seenSignatures);
+        allRows = [...allRows, ...data];
         if (preview) previews.push(preview);
       }
 
       setFilePreviews(previews);
       setShowPreviewModal(true);
 
-      const recordsArray = Array.from(allData.values());
-      setRecords(recordsArray);
-      toast.success(`Processed ${recordsArray.length} records from ${files.length} files`);
+      setIndividualRows(allRows);
+      toast.success(`Processed ${allRows.length} rows from ${files.length} files`);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to parse files';
       toast.error(message);
@@ -147,22 +132,22 @@ export default function UploadFile() {
   };
 
   const handleSaveRecords = async () => {
-    if (records.length === 0) {
+    if (individualRows.length === 0) {
       toast.error('No parsed records to save');
       return;
     }
 
     try {
       const fileName = files.length > 0 ? files[0].name : undefined;
-      const result: SaveResult = await saveMutation.mutateAsync({ records, fileName });
+      const result: SaveResult = await saveMutation.mutateAsync({ rows: individualRows, fileName });
       
       if (result.errors.length > 0) {
-        toast.error(`Saved ${result.saved} records, ${result.skipped} failed. Some drugs may already exist in inventory.`);
+        toast.error(`Saved ${result.saved} rows, ${result.skipped} failed. Some rows may already exist in inventory.`);
       } else {
-        toast.success(`Saved ${result.saved} records${result.skipped ? ` (${result.skipped} skipped)` : ''}`);
+        toast.success(`Saved ${result.saved} rows${result.skipped ? ` (${result.skipped} skipped)` : ''}`);
       }
       
-      setRecords([]);
+      setIndividualRows([]);
       setFiles([]);
       setFilePreviews([]);
       setShowPreviewModal(false);
@@ -210,7 +195,7 @@ export default function UploadFile() {
               onClick={() => {
                 setSelectedType(type.id);
                 setFiles([]);
-                setRecords([]);
+                setIndividualRows([]);
                 setFilePreviews([]);
               }}
               className={`card p-4 text-left transition-all hover:shadow-elevated ${
@@ -261,11 +246,11 @@ export default function UploadFile() {
       </div>
 
       {/* Parsed Records */}
-      {records.length > 0 && (
+      {individualRows.length > 0 && (
         <div className="mb-6">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-neutral-900">
-              Parsed Records ({records.length})
+              Parsed Rows ({individualRows.length})
             </h2>
             <button className="btn-primary" onClick={handleSaveRecords} disabled={saveMutation.isPending}>
               {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -283,18 +268,27 @@ export default function UploadFile() {
                     <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wider text-neutral-500">
                       {selectedType === 'purchase' ? 'Purchased' : selectedType === 'dispense' ? 'Dispensed' : 'Destroyed'}
                     </th>
+                    <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wider text-neutral-500">Date</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {records.map((record, index) => (
-                    <tr key={`${record.din}-${index}`} className="border-b border-neutral-50 hover:bg-neutral-50/50">
-                      <td className="px-3 py-3 text-sm font-mono text-neutral-800">{record.din}</td>
-                      <td className="px-3 py-3 text-sm text-neutral-600">{record.description ?? '—'}</td>
-                      <td className="px-3 py-3 text-right text-sm text-neutral-600">
-                        {selectedType === 'purchase' ? record.purchased : selectedType === 'dispense' ? record.dispensed : (record.dispensed || record.purchased)}
+                  {individualRows.slice(0, 20).map((row, index) => (
+                    <tr key={`${row.din}-${index}`} className="border-b border-neutral-50 hover:bg-neutral-50/50">
+                      <td className="px-3 py-3 text-sm font-mono text-neutral-800">{row.din}</td>
+                      <td className="px-3 py-3 text-sm text-neutral-600">{row.description ?? '—'}</td>
+                      <td className="px-3 py-3 text-right text-sm text-neutral-600">{row.quantity}</td>
+                      <td className="px-3 py-3 text-right text-xs text-neutral-400">
+                        {row.date ? row.date.toLocaleDateString() : '—'}
                       </td>
                     </tr>
                   ))}
+                  {individualRows.length > 20 && (
+                    <tr>
+                      <td colSpan={4} className="px-3 py-2 text-center text-xs text-neutral-400">
+                        ... and {individualRows.length - 20} more rows
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>

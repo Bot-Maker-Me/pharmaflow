@@ -252,6 +252,111 @@ async function saveImportedRecords({
   return { saved, skipped, errors };
 }
 
+async function saveImportedIndividualRows({
+  kind,
+  rows,
+  fileName,
+}: {
+  kind: ImportKind;
+  rows: Array<{ din: string; description?: string; quantity: number; date: Date | null; type: 'purchase' | 'dispense' }>;
+  fileName?: string;
+}): Promise<SaveResult> {
+  const config = KIND_CONFIG[kind];
+  let saved = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  console.log(`Starting to save ${rows.length} individual ${kind} rows...`);
+
+  // Filter out invalid rows first
+  const validRows = rows.filter(row => {
+    return row.din && row.quantity > 0;
+  });
+
+  console.log(`Filtered to ${validRows.length} valid rows out of ${rows.length} total`);
+  skipped = rows.length - validRows.length;
+
+  if (validRows.length === 0) {
+    console.log('No valid rows to save');
+    return { saved: 0, skipped, errors };
+  }
+
+  // Batch process: First ensure all drug IDs exist
+  const drugIdMap = new Map<string, string>();
+  const uniqueDins = [...new Set(validRows.map(r => r.din))];
+  
+  console.log(`Ensuring ${uniqueDins.length} unique drug IDs exist...`);
+  
+  for (const din of uniqueDins) {
+    try {
+      const row = validRows.find(r => r.din === din);
+      const drugId = await ensureDrugId(din, row?.description);
+      drugIdMap.set(din, drugId);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      console.error(`Error ensuring drug ID for DIN ${din}:`, errorMessage);
+      errors.push(`DIN ${din}: ${errorMessage}`);
+      // Remove rows with this DIN from valid rows
+      const index = validRows.findIndex(r => r.din === din);
+      if (index !== -1) {
+        validRows.splice(index, 1);
+        skipped += 1;
+      }
+    }
+  }
+
+  console.log(`Drug IDs ensured. Preparing ${validRows.length} individual transactions for batch insert...`);
+
+  // Prepare all individual transactions for batch insert
+  const transactions = validRows.map(row => {
+    const drugId = drugIdMap.get(row.din);
+    const signedQty = config.type === 'PURCHASE' ? row.quantity : -row.quantity;
+    const transactionDate = row.date ? row.date.toISOString() : new Date().toISOString();
+
+    return {
+      drug_id: drugId,
+      transaction_type: config.type,
+      quantity: signedQty,
+      date: transactionDate,
+      file_name: fileName,
+    };
+  });
+
+  // Batch insert all transactions
+  console.log(`Inserting ${transactions.length} individual transactions in batch...`);
+  const { error: txError } = await supabase.from('inventory_transactions').insert(transactions);
+
+  if (txError) {
+    console.error('Batch insert error:', txError);
+    // If batch insert fails, fall back to individual inserts
+    console.log('Falling back to individual inserts...');
+    
+    for (const transaction of transactions) {
+      try {
+        const { error: individualError } = await supabase.from('inventory_transactions').insert(transaction);
+        if (individualError) {
+          console.error(`Error saving individual transaction:`, individualError);
+          errors.push(`Transaction error: ${individualError.message}`);
+          skipped += 1;
+        } else {
+          saved += 1;
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+        console.error(`Error in individual insert:`, errorMessage);
+        errors.push(`Transaction error: ${errorMessage}`);
+        skipped += 1;
+      }
+    }
+  } else {
+    saved = transactions.length;
+    console.log(`Successfully saved ${saved} individual transactions in batch`);
+  }
+
+  console.log(`Save complete: ${saved} saved, ${skipped} skipped, ${errors.length} errors`);
+  return { saved, skipped, errors };
+}
+
 export function useImportedRecords(kind: ImportKind) {
   return useQuery({
     queryKey: ['imported-records', kind],
@@ -264,6 +369,24 @@ export function useSaveImportedRecords(kind: ImportKind) {
   return useMutation({
     mutationFn: ({ records, fileName }: { records: ParsedDinData[]; fileName?: string }) => 
       saveImportedRecords({ kind, records, fileName }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['imported-records', kind] });
+      queryClient.invalidateQueries({ queryKey: ['drugs'] });
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      
+      // Log any errors that occurred during save
+      if (result.errors.length > 0) {
+        console.warn('Errors during save:', result.errors);
+      }
+    },
+  });
+}
+
+export function useSaveImportedIndividualRows(kind: ImportKind) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ rows, fileName }: { rows: Array<{ din: string; description?: string; quantity: number; date: Date | null; type: 'purchase' | 'dispense' }>; fileName?: string }) => 
+      saveImportedIndividualRows({ kind, rows, fileName }),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['imported-records', kind] });
       queryClient.invalidateQueries({ queryKey: ['drugs'] });

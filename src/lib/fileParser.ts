@@ -345,6 +345,132 @@ function aggregateRows(
   return result;
 }
 
+// New function to parse individual rows without aggregation
+function parseIndividualRows(
+  rows: ParsedRow[],
+  source: 'mckesson' | 'kroll',
+  seenSignatures?: Set<string>
+): Array<{ din: string; description?: string; quantity: number; date: Date | null; type: 'purchase' | 'dispense' }> {
+  if (rows.length === 0) return [];
+
+  const keys = Object.keys(rows[0]);
+  const dinKey = findColumnKey(keys, ['DIN', 'Drug Identification Number', 'DIN/PIN', 'drug id']);
+  if (!dinKey) {
+    throw new Error(
+      source === 'mckesson'
+        ? 'Could not find a DIN column in the McKesson file. Expected a column named "DIN" or similar.'
+        : 'Could not find a DIN column in the Kroll file. Expected a column named "DIN" or similar.'
+    );
+  }
+
+  const qtyKey = source === 'mckesson'
+    ? findColumnKey(keys, ['Quantity', 'Qty', 'Received', 'Purchased', 'Shipped'])
+    : findColumnKey(keys, ['Quantity', 'Qty', 'Dispensed', 'Filled', 'Count']);
+  const typeKey = findColumnKey(keys, ['Type', 'Transaction Type', 'Action', 'Direction']);
+  const dateKey = findColumnKey(keys, ['Date', 'Transaction Date', 'Invoice Date', 'Order Date', 'Timestamp', 'Time', 'Day', 'FillDate', 'Fill Date']);
+  const descKey = findColumnKey(keys, ['Drug Description', 'Product Name', 'Drug Name', 'Description', 'Product', 'Medication']);
+  const packSizeKey = findColumnKey(keys, ['Pack Size', 'PackSize', 'Package Size', 'Size', 'Package', 'Pkg Size']);
+
+  const result: Array<{ din: string; description?: string; quantity: number; date: Date | null; type: 'purchase' | 'dispense' }> = [];
+  let skippedCount = 0;
+
+  for (const row of rows) {
+    const din = normalizeDin(String(row[dinKey] ?? ''));
+    if (!din) continue;
+
+    let qty = qtyKey ? extractNumber(row[qtyKey]) : 1;
+    const date = dateKey ? extractDate(row[dateKey]) : null;
+
+    // Generate row signature for deduplication
+    if (seenSignatures) {
+      const signature = generateRowSignature(din, qty, date, row);
+      if (seenSignatures.has(signature)) {
+        console.log(`Skipping duplicate row for DIN ${din}: ${signature}`);
+        skippedCount++;
+        continue;
+      }
+      seenSignatures.add(signature);
+    }
+
+    // Extract pack size from McKesson file
+    let packSize = 1;
+    if (source === 'mckesson') {
+      if (packSizeKey) {
+        const colPackSize = extractNumber(row[packSizeKey]);
+        if (colPackSize > 1) {
+          packSize = colPackSize;
+        }
+      }
+
+      if (packSize === 1 && descKey) {
+        const desc = String(row[descKey] ?? '').trim();
+        const dosageThenPackMatch = desc.match(/(\d+(?:\.\d+)?)MG(\d{2,4})\b/i);
+        if (dosageThenPackMatch) {
+          packSize = parseInt(dosageThenPackMatch[2], 10);
+        }
+
+        const spaceMatch = desc.match(/(\d+(?:\.\d+)?)MG\s+(\d{2,4})\b/i);
+        if (spaceMatch && packSize === 1) {
+          packSize = parseInt(spaceMatch[2], 10);
+        }
+
+        const mlMatch = desc.match(/(\d+)\s*ML\b/i);
+        if (mlMatch && packSize === 1) {
+          packSize = parseInt(mlMatch[1], 10);
+        }
+
+        const tabMatch = desc.match(/(\d+)\s*(TAB|CAP|PK|PACK)\b/i);
+        if (tabMatch && packSize === 1) {
+          packSize = parseInt(tabMatch[1], 10);
+        }
+
+        const endMatch = desc.match(/\b(\d{2,4})\b$/);
+        if (endMatch && packSize === 1) {
+          packSize = parseInt(endMatch[1], 10);
+        }
+      }
+
+      if (packSize > 1) {
+        qty = qty * packSize;
+      }
+    }
+    
+    let transactionType: 'purchase' | 'dispense';
+    
+    if (source === 'mckesson') {
+      transactionType = 'purchase';
+    } else {
+      const typeVal = typeKey ? String(row[typeKey] ?? '').toLowerCase() : '';
+      if (typeVal.includes('purchase') || typeVal.includes('receive') || typeVal.includes('adjust+')) {
+        transactionType = 'purchase';
+      } else {
+        transactionType = 'dispense';
+      }
+    }
+
+    const description = descKey ? String(row[descKey] ?? '').trim() : undefined;
+    if (description && description.length > 5) {
+      result.push({
+        din,
+        description,
+        quantity: qty,
+        date,
+        type: transactionType
+      });
+    } else {
+      result.push({
+        din,
+        quantity: qty,
+        date,
+        type: transactionType
+      });
+    }
+  }
+
+  console.log(`Parsed ${result.length} individual rows for ${source}, skipped ${skippedCount} duplicates`);
+  return result;
+}
+
 export async function parseReconciliationFiles(
   mckessonFile: File,
   krollFile: File
@@ -396,6 +522,40 @@ export async function parseSingleFileWithPreview(
 
   const data = aggregateRows(rows, source, drugs, seenSignatures);
   const preview = createFilePreview(file, rows, data.size);
+
+  return { data, preview };
+}
+
+export async function parseSingleFileWithIndividualRows(
+  file: File,
+  source: 'mckesson' | 'kroll',
+  seenSignatures?: Set<string>
+): Promise<{ data: Array<{ din: string; description?: string; quantity: number; date: Date | null; type: 'purchase' | 'dispense' }>; preview: FilePreview }> {
+  const ext = file.name.split('.').pop()?.toLowerCase();
+
+  let rows: ParsedRow[] = [];
+
+  if (ext === 'csv' || ext === 'txt') {
+    rows = await new Promise<ParsedRow[]>((resolve, reject) => {
+      Papa.parse<ParsedRow>(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => resolve(results.data),
+        error: (err) => reject(new Error(`Failed to parse CSV: ${err.message}`)),
+      });
+    });
+  } else if (ext === 'xlsx' || ext === 'xls') {
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: 'array' });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    rows = XLSX.utils.sheet_to_json<ParsedRow>(sheet, { defval: '' });
+  } else {
+    throw new Error(`Unsupported file format: .${ext}. Please upload .csv or .xlsx files.`);
+  }
+
+  const data = parseIndividualRows(rows, source, seenSignatures);
+  const preview = createFilePreview(file, rows, data.length);
 
   return { data, preview };
 }
