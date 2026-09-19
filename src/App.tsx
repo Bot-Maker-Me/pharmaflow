@@ -22,6 +22,7 @@ import Terms from '@/pages/Terms';
 import PurchaseRecords from '@/pages/PurchaseRecords';
 import DispensingRecords from '@/pages/DispensingRecords';
 import DestructionRecords from '@/pages/DestructionRecords';
+import UploadFile from '@/pages/UploadFile';
 import Reports from '@/pages/Reports';
 import { Loader2 } from 'lucide-react';
 import { hasAccess } from '@/types/admin';
@@ -82,6 +83,7 @@ function AppRoutes() {
         <Route path="/prescriptions" element={<Prescriptions />} />
         <Route path="/reconciliation" element={<Reconciliation />} />
         <Route path="/reports" element={<Reports />} />
+        <Route path="/upload-file" element={<UploadFile />} />
         <Route path="/purchase-records" element={<PurchaseRecords />} />
         <Route path="/dispensing-records" element={<DispensingRecords />} />
         <Route path="/destruction-records" element={<DestructionRecords />} />

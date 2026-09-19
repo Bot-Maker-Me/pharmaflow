@@ -14,6 +14,7 @@ import {
   ShoppingCart,
   Activity,
   Trash2,
+  FileText,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import toast from 'react-hot-toast';
@@ -25,6 +26,7 @@ const baseNavItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/transactions', label: 'Transactions', icon: Receipt },
   { to: '/reconciliation', label: 'Manual Reconciliation', icon: Scale },
+  { to: '/upload-file', label: 'Upload File', icon: FileText },
   { to: '/purchase-records', label: 'Purchase Records', icon: ShoppingCart },
   { to: '/dispensing-records', label: 'Dispensing Records', icon: Activity },
   { to: '/destruction-records', label: 'Destruction Records', icon: Trash2 },
