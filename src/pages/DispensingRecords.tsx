@@ -1,10 +1,30 @@
-import { Loader2, FileText, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { Loader2, FileText, Trash2, Filter, X, ChevronDown } from 'lucide-react';
 import { useImportedRecords, useDeleteImportedFile } from '@/hooks/useImportedRecords';
 import toast from 'react-hot-toast';
+
+const DISPENSE_FILTER_OPTIONS = [
+  { value: 'rx', label: 'RX' },
+  { value: 'qty', label: 'Qty' },
+  { value: 'drug', label: 'Drug' },
+  { value: 'din', label: 'DIN' },
+  { value: 'fillDate', label: 'Fill Date' },
+];
 
 export default function DispensingRecords() {
   const { data: savedRecords, isLoading: savedLoading } = useImportedRecords('dispense');
   const deleteMutation = useDeleteImportedFile('dispense');
+
+  const [filters, setFilters] = useState({
+    rx: '',
+    qty: '',
+    drug: '',
+    din: '',
+    fillDate: '',
+  });
+
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<string | null>(null);
 
   const handleDeleteFile = async (fileName: string) => {
     const isDateBasedLabel = fileName.startsWith('Imported ');
@@ -27,11 +47,110 @@ export default function DispensingRecords() {
     }
   };
 
+  const handleFilterChange = (filterKey: string, value: string) => {
+    setFilters(prev => ({ ...prev, [filterKey]: value }));
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      rx: '',
+      qty: '',
+      drug: '',
+      din: '',
+      fillDate: '',
+    });
+    setActiveFilter(null);
+  };
+
+  const filterRecords = (records: typeof savedRecords) => {
+    if (!records) return records;
+    
+    return records.filter(record => {
+      if (filters.fillDate && !new Date(record.created_at).toLocaleDateString().toLowerCase().includes(filters.fillDate.toLowerCase())) {
+        return false;
+      }
+      if (filters.din && !record.din.toLowerCase().includes(filters.din.toLowerCase())) {
+        return false;
+      }
+      if (filters.qty && !record.quantity.toString().includes(filters.qty)) {
+        return false;
+      }
+      if (filters.drug && !record.description?.toLowerCase().includes(filters.drug.toLowerCase())) {
+        return false;
+      }
+      // RX filtering - for now we'll filter by description since we don't have a separate RX field
+      if (filters.rx && !record.description?.toLowerCase().includes(filters.rx.toLowerCase())) {
+        return false;
+      }
+      return true;
+    });
+  };
+
+  const filteredRecords = filterRecords(savedRecords);
+
   return (
     <div>
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-neutral-900">Dispensing Records</h1>
         <p className="mt-1 text-sm text-neutral-500">View all uploaded dispensing records (raw data from files)</p>
+      </div>
+
+      {/* Filter Section */}
+      <div className="mb-6 card p-4">
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <button
+              onClick={() => setShowFilterDropdown(!showFilterDropdown)}
+              className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 transition-colors hover:bg-neutral-50"
+            >
+              <Filter className="h-4 w-4" />
+              Filter
+              <ChevronDown className="h-4 w-4" />
+            </button>
+
+            {showFilterDropdown && (
+              <div className="absolute top-full left-0 mt-2 w-48 rounded-lg border border-neutral-200 bg-white shadow-elevated z-10">
+                {DISPENSE_FILTER_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    onClick={() => {
+                      setActiveFilter(option.value);
+                      setShowFilterDropdown(false);
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-50 transition-colors"
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {activeFilter && (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder={`Filter by ${DISPENSE_FILTER_OPTIONS.find(o => o.value === activeFilter)?.label.toLowerCase()}`}
+                value={filters[activeFilter as keyof typeof filters]}
+                onChange={(e) => handleFilterChange(activeFilter, e.target.value)}
+                className="rounded-lg border border-neutral-200 px-3 py-2 text-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              />
+              <button
+                onClick={clearFilters}
+                className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 transition-colors"
+                title="Clear filters"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+
+          {filteredRecords && filteredRecords.length !== savedRecords?.length && (
+            <span className="text-xs text-neutral-500">
+              Showing {filteredRecords.length} of {savedRecords?.length} records
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="card overflow-hidden">
@@ -48,8 +167,8 @@ export default function DispensingRecords() {
         ) : (
           <div>
             {(() => {
-              const groupedRecords = new Map<string, typeof savedRecords>();
-              savedRecords.forEach(record => {
+              const groupedRecords = new Map<string, typeof filteredRecords>();
+              filteredRecords.forEach(record => {
                 const fileName = record.file_name || `Imported ${new Date(record.created_at).toLocaleDateString()}`;
                 if (!groupedRecords.has(fileName)) {
                   groupedRecords.set(fileName, []);
