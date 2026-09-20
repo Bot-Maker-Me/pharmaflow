@@ -32,7 +32,7 @@ export default function PurchaseRecords() {
   });
 
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
-  const [activeFilter, setActiveFilter] = useState<string | null>(null);
+  const [activeFilters, setActiveFilters] = useState<string[]>([]);
 
   const handleDeleteFile = async (fileName: string) => {
     const isDateBasedLabel = fileName.startsWith('Imported ');
@@ -67,7 +67,20 @@ export default function PurchaseRecords() {
       qty: '',
       description: '',
     });
-    setActiveFilter(null);
+    setActiveFilters([]);
+  };
+
+  const toggleFilter = (filterValue: string) => {
+    setActiveFilters(prev => {
+      if (prev.includes(filterValue)) {
+        // Remove filter and clear its value
+        setFilters(current => ({ ...current, [filterValue]: '' }));
+        return prev.filter(f => f !== filterValue);
+      } else {
+        // Add filter
+        return [...prev, filterValue];
+      }
+    });
   };
 
   const filterRecords = (records: typeof savedRecords) => {
@@ -109,7 +122,7 @@ export default function PurchaseRecords() {
 
       {/* Filter Section */}
       <div className="mb-6 card p-4">
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <div className="relative">
             <button
               onClick={() => setShowFilterDropdown(!showFilterDropdown)}
@@ -126,33 +139,53 @@ export default function PurchaseRecords() {
                   <button
                     key={option.value}
                     onClick={() => {
-                      setActiveFilter(option.value);
+                      toggleFilter(option.value);
                       setShowFilterDropdown(false);
                     }}
-                    className="w-full text-left px-4 py-2 text-sm text-neutral-700 hover:bg-neutral-50 transition-colors"
+                    className={`w-full text-left px-4 py-2 text-sm transition-colors ${
+                      activeFilters.includes(option.value)
+                        ? 'bg-primary-50 text-primary-700'
+                        : 'text-neutral-700 hover:bg-neutral-50'
+                    }`}
                   >
-                    {option.label}
+                    <div className="flex items-center justify-between">
+                      {option.label}
+                      {activeFilters.includes(option.value) && <span className="text-xs">✓</span>}
+                    </div>
                   </button>
                 ))}
               </div>
             )}
           </div>
 
-          {activeFilter && (
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                placeholder={`Filter by ${PURCHASE_FILTER_OPTIONS.find(o => o.value === activeFilter)?.label.toLowerCase()}`}
-                value={filters[activeFilter as keyof typeof filters]}
-                onChange={(e) => handleFilterChange(activeFilter, e.target.value)}
-                className="rounded-lg border border-neutral-200 px-3 py-2 text-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              />
+          {activeFilters.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              {activeFilters.map((filterValue) => (
+                <div key={filterValue} className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2">
+                  <span className="text-xs font-medium text-neutral-600">
+                    {PURCHASE_FILTER_OPTIONS.find(o => o.value === filterValue)?.label}
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="Search..."
+                    value={filters[filterValue as keyof typeof filters]}
+                    onChange={(e) => handleFilterChange(filterValue, e.target.value)}
+                    className="w-24 rounded border border-neutral-200 px-2 py-1 text-xs focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-100"
+                  />
+                  <button
+                    onClick={() => toggleFilter(filterValue)}
+                    className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 transition-colors"
+                    title="Remove filter"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
               <button
                 onClick={clearFilters}
-                className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 transition-colors"
-                title="Clear filters"
+                className="rounded-lg px-3 py-2 text-xs font-medium text-neutral-600 hover:bg-neutral-100 transition-colors"
               >
-                <X className="h-4 w-4" />
+                Clear All
               </button>
             </div>
           )}
