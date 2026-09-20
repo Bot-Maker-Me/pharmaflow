@@ -403,14 +403,49 @@ export function useSaveImportedIndividualRows(kind: ImportKind) {
 async function deleteTransactionsByFileName(fileName: string, kind: ImportKind): Promise<number> {
   const config = KIND_CONFIG[kind];
   
-  const { error } = await supabase
-    .from('inventory_transactions')
-    .delete()
-    .eq('file_name', fileName)
-    .eq('transaction_type', config.type);
+  // Check if this is a date-based label (for old records without file_name)
+  const isDateBasedLabel = fileName.startsWith('Imported ');
+  
+  if (isDateBasedLabel) {
+    // For old records, delete by transaction_type and date pattern
+    // Extract the date from the label (e.g., "Imported 9/5/2025" -> "9/5/2025")
+    const dateStr = fileName.replace('Imported ', '');
+    
+    // Try to parse the date and delete records from that date
+    try {
+      const date = new Date(dateStr);
+      if (!isNaN(date.getTime())) {
+        // Get the start and end of that day
+        const startOfDay = new Date(date);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(date);
+        endOfDay.setHours(23, 59, 59, 999);
+        
+        const { error } = await supabase
+          .from('inventory_transactions')
+          .delete()
+          .eq('transaction_type', config.type)
+          .gte('created_at', startOfDay.toISOString())
+          .lte('created_at', endOfDay.toISOString());
 
-  if (error) throw error;
-  return 0; // Supabase doesn't return count, we'll rely on cache invalidation
+        if (error) throw error;
+        return 0;
+      }
+    } catch (err) {
+      console.error('Error parsing date from label:', err);
+      throw new Error('Could not parse date from old record label');
+    }
+  } else {
+    // For new records with proper file names
+    const { error } = await supabase
+      .from('inventory_transactions')
+      .delete()
+      .eq('file_name', fileName)
+      .eq('transaction_type', config.type);
+
+    if (error) throw error;
+    return 0;
+  }
 }
 
 export function useDeleteImportedFile(kind: ImportKind) {

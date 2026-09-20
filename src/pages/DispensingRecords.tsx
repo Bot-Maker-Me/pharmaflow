@@ -27,13 +27,6 @@ export default function DispensingRecords() {
   const [activeFilters, setActiveFilters] = useState<string[]>([]);
 
   const handleDeleteFile = async (fileName: string) => {
-    const isDateBasedLabel = fileName.startsWith('Imported ');
-    
-    if (isDateBasedLabel) {
-      toast.error('Cannot delete records imported before file tracking was added. Please delete them individually from Transaction History.');
-      return;
-    }
-
     if (!confirm(`Are you sure you want to delete all records from "${fileName}"? This will also remove them from Transaction History.`)) {
       return;
     }

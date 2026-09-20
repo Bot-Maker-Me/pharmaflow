@@ -204,14 +204,6 @@ export default function RecordImportPage({ kind }: { kind: ImportKind }) {
   };
 
   const handleDeleteFile = async (fileName: string) => {
-    // Check if this is a date-based label (for old records without file_name)
-    const isDateBasedLabel = fileName.startsWith('Imported ');
-    
-    if (isDateBasedLabel) {
-      toast.error('Cannot delete records imported before file tracking was added. Please delete them individually from Transaction History.');
-      return;
-    }
-
     if (!confirm(`Are you sure you want to delete all records from "${fileName}"? This will also remove them from Transaction History.`)) {
       return;
     }
