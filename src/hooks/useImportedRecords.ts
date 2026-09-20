@@ -411,40 +411,76 @@ async function deleteTransactionsByFileName(fileName: string, kind: ImportKind):
     // Extract the date from the label (e.g., "Imported 9/5/2025" -> "9/5/2025")
     const dateStr = fileName.replace('Imported ', '');
     
-    // Try to parse the date and delete records from that date
-    try {
-      const date = new Date(dateStr);
-      if (!isNaN(date.getTime())) {
-        // Get the start and end of that day
-        const startOfDay = new Date(date);
-        startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date(date);
-        endOfDay.setHours(23, 59, 59, 999);
-        
-        const { error } = await supabase
-          .from('inventory_transactions')
-          .delete()
-          .eq('transaction_type', config.type)
-          .gte('created_at', startOfDay.toISOString())
-          .lte('created_at', endOfDay.toISOString());
-
-        if (error) throw error;
-        return 0;
+    console.log(`Attempting to delete old records with date label: ${dateStr}`);
+    
+    // Try to parse the date with multiple formats
+    let date: Date | null = null;
+    
+    // Try DD/MM/YYYY format first (common in many regions)
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      const [day, month, year] = parts.map(Number);
+      if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
+        // Try DD/MM/YYYY
+        date = new Date(year, month - 1, day);
+        if (isNaN(date.getTime())) {
+          // Try MM/DD/YYYY as fallback
+          date = new Date(year, day - 1, month);
+        }
       }
-    } catch (err) {
-      console.error('Error parsing date from label:', err);
+    }
+    
+    // Fallback to standard Date parsing
+    if (!date || isNaN(date.getTime())) {
+      date = new Date(dateStr);
+    }
+    
+    if (date && !isNaN(date.getTime())) {
+      console.log(`Parsed date: ${date.toISOString()}`);
+      
+      // Get the start and end of that day
+      const startOfDay = new Date(date);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(date);
+      endOfDay.setHours(23, 59, 59, 999);
+      
+      console.log(`Deleting records between ${startOfDay.toISOString()} and ${endOfDay.toISOString()}`);
+      
+      const { error, count } = await supabase
+        .from('inventory_transactions')
+        .delete()
+        .eq('transaction_type', config.type)
+        .gte('created_at', startOfDay.toISOString())
+        .lte('created_at', endOfDay.toISOString());
+
+      if (error) {
+        console.error('Supabase deletion error:', error);
+        throw error;
+      }
+      
+      console.log(`Deleted ${count} records`);
+      return count || 0;
+    } else {
+      console.error('Could not parse date from label:', dateStr);
       throw new Error('Could not parse date from old record label');
     }
   } else {
     // For new records with proper file names
-    const { error } = await supabase
+    console.log(`Deleting records with file name: ${fileName}`);
+    
+    const { error, count } = await supabase
       .from('inventory_transactions')
       .delete()
       .eq('file_name', fileName)
       .eq('transaction_type', config.type);
 
-    if (error) throw error;
-    return 0;
+    if (error) {
+      console.error('Supabase deletion error:', error);
+      throw error;
+    }
+    
+    console.log(`Deleted ${count} records`);
+    return count || 0;
   }
 }
 
