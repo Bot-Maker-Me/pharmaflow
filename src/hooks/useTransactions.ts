@@ -24,29 +24,50 @@ async function fetchTransactions(params: FetchParams): Promise<{
   try {
     console.log('Fetching transactions with params:', { page, search, type, source, startDate, endDate });
 
-    // Start with basic query without filters
+    // If there's a search term, first find matching drug IDs
+    let matchingDrugIds: string[] | null = null;
+    if (search) {
+      const { data: drugsData, error: drugsError } = await supabase
+        .from('drugs')
+        .select('id')
+        .or(`din.ilike.%${search}%,description.ilike.%${search}%`);
+
+      if (drugsError) {
+        console.error('Drug search error:', drugsError);
+        throw drugsError;
+      }
+
+      matchingDrugIds = drugsData?.map(d => d.id) ?? [];
+      console.log(`Found ${matchingDrugIds.length} matching drugs for search: "${search}"`);
+
+      // If no drugs match, return empty result immediately
+      if (matchingDrugIds.length === 0) {
+        return { data: [], count: 0 };
+      }
+    }
+
+    // Start with basic query
     let query = supabase
       .from('inventory_transactions')
       .select('*, drugs(description, din)', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range(from, to);
+      .order('created_at', { ascending: false });
 
-    // Apply search filter - simplified
-    if (search) {
-      query = query.or(`drugs.din.ilike.%${search}%,drugs.description.ilike.%${search}%`);
+    // Apply search filter by drug IDs
+    if (matchingDrugIds) {
+      query = query.in('drug_id', matchingDrugIds);
     }
 
-    // Apply type filter - simplified
+    // Apply type filter
     if (type) {
       query = query.eq('transaction_type', type);
     }
 
-    // Apply source filter - simplified
+    // Apply source filter
     if (source) {
       query = query.eq('source', source);
     }
 
-    // Apply date range filter - simplified
+    // Apply date range filter
     if (startDate) {
       const startISO = new Date(startDate).toISOString();
       query = query.gte('created_at', startISO);
@@ -55,6 +76,9 @@ async function fetchTransactions(params: FetchParams): Promise<{
       const endISO = new Date(new Date(endDate).setDate(new Date(endDate).getDate() + 1)).toISOString();
       query = query.lt('created_at', endISO);
     }
+
+    // Apply pagination after all filters
+    query = query.range(from, to);
 
     const { data, error, count } = await query;
 

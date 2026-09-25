@@ -296,7 +296,7 @@ export default function TransactionHistory() {
               </tbody>
             </table>
 
-            {!isLoading && transactions.length === 0 && (
+            {!isLoading && !isError && transactions.length === 0 && (
               <div className="py-16 text-center">
                 <Clock className="mx-auto h-10 w-10 text-neutral-300" />
                 <p className="mt-3 text-sm text-neutral-400">
