@@ -106,52 +106,24 @@ export interface PipelineState {
 
 export interface Settings {
   pms: PmsId;
-  agentUrl: string;
+  /** Base URL of the local desktop helper, e.g. http://localhost:48120 */
+  helperUrl: string;
   apiBaseUrl: string;
   extractionMode: "demo" | "live";
   autoAdvance: boolean;
   highThreshold: number;
   mediumThreshold: number;
+  theme: "light" | "dark";
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   pms: "kroll",
-  agentUrl: "ws://localhost:48120",
+  helperUrl: "http://localhost:48120",
   apiBaseUrl: "http://localhost:8000",
   extractionMode: "demo",
   autoAdvance: true,
   highThreshold: 0.9,
   mediumThreshold: 0.7,
+  theme: "light",
 };
 
-/** Flat, form-friendly view of a script used by the verification UI. */
-export interface ExtractionPayload {
-  document_metadata: {
-    is_multi_page: boolean;
-    page_number: number;
-    is_prescription: boolean;
-  };
-  patient: {
-    full_name: string;
-    dob: string;
-    health_card_num: string;
-    confidence: number;
-  };
-  prescriber: {
-    name: string;
-    license_number: string;
-    confidence: number;
-  };
-  medications: Array<{
-    drug_name: string;
-    din: string;
-    strength: string;
-    quantity: number;
-    refills: number;
-    sig: string;
-    is_compound: boolean;
-    confidence: number;
-  }>;
-  overall_confidence: number;
-  illegible_handwriting: boolean;
-}

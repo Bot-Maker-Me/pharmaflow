@@ -11,11 +11,10 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-import { AgentStatusPill } from "@/components/AgentStatusPill";
 import { ConfidenceChart } from "@/components/ConfidenceChart";
 import { ConfidenceLegend } from "@/components/Confidence";
+import { HelperStatus } from "@/components/HelperStatus";
 import { ManualEntryDialog } from "@/components/ManualEntryDialog";
-import { PmsSelector } from "@/components/PmsSelector";
 import { QueueTable } from "@/components/QueueTable";
 import { StatCard } from "@/components/StatCard";
 import { UploadDropzone } from "@/components/UploadDropzone";
@@ -36,7 +35,8 @@ export default function Index() {
     pipeline,
     activity,
     settings,
-    agentStatus,
+    helperStatus,
+    helperInfo,
     ingestFiles,
     loadSampleFax,
   } = useAppStore();
@@ -156,33 +156,36 @@ export default function Index() {
               <CardDescription>Keystroke automation bridge</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 pt-0">
-              <AgentStatusPill />
+              <HelperStatus />
               <div className="rounded-lg border border-border bg-secondary/50 p-3 text-xs">
                 <p className="flex items-center justify-between gap-2">
                   <span className="text-muted-foreground">Endpoint</span>
-                  <span className="font-mono text-foreground">{settings.agentUrl}</span>
+                  <span className="font-mono text-foreground">{settings.helperUrl}</span>
                 </p>
                 <Separator className="my-2" />
                 <p className="flex items-center justify-between gap-2">
-                  <span className="text-muted-foreground">Target PMS</span>
-                  <span className="font-medium text-foreground">{profile.name}</span>
+                  <span className="text-muted-foreground">target_system</span>
+                  <span className="font-mono text-foreground">{profile.targetSystem}</span>
                 </p>
                 <Separator className="my-2" />
                 <p className="flex items-center justify-between gap-2">
                   <span className="text-muted-foreground">Hotkey</span>
                   <span className="font-mono text-foreground">{profile.shortcut}</span>
                 </p>
-              </div>
-              <div>
-                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Change target
-                </p>
-                <PmsSelector />
+                {helperInfo.version ? (
+                  <>
+                    <Separator className="my-2" />
+                    <p className="flex items-center justify-between gap-2">
+                      <span className="text-muted-foreground">Helper build</span>
+                      <span className="font-mono text-foreground">v{helperInfo.version}</span>
+                    </p>
+                  </>
+                ) : null}
               </div>
               <p className="text-[11px] text-muted-foreground">
-                {agentStatus === "connected"
-                  ? "The helper is listening — pushes are written straight into the PMS window."
-                  : "Install pharmflow-helper.exe on the workstation to enable direct keystroke injection. Until then, pushes run in simulation mode."}
+                {helperStatus === "connected"
+                  ? "The helper is listening — pushes POST to /autofill and are typed straight into the PMS window."
+                  : "Run helper/kroll_tray_helper.py (or the packaged .exe) on the workstation to enable keystroke injection. Until then, pushes run in simulation mode."}
               </p>
             </CardContent>
           </Card>

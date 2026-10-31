@@ -1,13 +1,18 @@
-import type { Medication, PmsId, Script } from "@/lib/types";
+import type { PmsId, Script } from "@/lib/types";
 
 export interface PmsProfile {
   id: PmsId;
   name: string;
+  shortName: string;
   vendor: string;
+  /** Value placed in the `target_system` field of the helper payload. */
+  targetSystem: "KROLL" | "PROPELRX" | "WINRX";
+  /** Global hotkey the technician can use to trigger a push. */
   shortcut: string;
   /** Tailwind accent classes for the target chip. */
   accent: string;
-  /** Human readable field-entry order for the keystroke plan preview. */
+  /** Key sequence used by the desktop helper driver. */
+  keyMap: { patient: string; prescriber: string; drug: string };
   entryOrder: string[];
 }
 
@@ -15,49 +20,55 @@ export const PMS_PROFILES: PmsProfile[] = [
   {
     id: "kroll",
     name: "TELUS Kroll",
+    shortName: "Kroll",
     vendor: "TELUS Health",
+    targetSystem: "KROLL",
     shortcut: "Ctrl + Shift + V",
-    accent: "text-sky-700 bg-sky-50 border-sky-200",
+    accent:
+      "text-sky-700 bg-sky-50 border-sky-200 dark:text-sky-300 dark:bg-sky-950/50 dark:border-sky-900",
+    keyMap: { patient: "F3", prescriber: "F7", drug: "F5" },
     entryOrder: [
-      "Patient search window",
-      "Health card + DOB",
-      "Prescriber lookup",
-      "Drug / DIN entry",
+      "Patient lookup (F3)",
+      "Prescriber lookup (F7)",
+      "Drug / DIN entry (F5)",
       "Sig instructions",
-      "Quantity & refills",
-      "Confirm & print label",
+      "Quantity",
     ],
   },
   {
     id: "propelrx",
     name: "McKesson Propel Rx",
+    shortName: "Propel Rx",
     vendor: "McKesson Canada",
+    targetSystem: "PROPELRX",
     shortcut: "Ctrl + Shift + P",
-    accent: "text-violet-700 bg-violet-50 border-violet-200",
+    accent:
+      "text-violet-700 bg-violet-50 border-violet-200 dark:text-violet-300 dark:bg-violet-950/50 dark:border-violet-900",
+    keyMap: { patient: "Ctrl+F", prescriber: "F2", drug: "F6" },
     entryOrder: [
-      "New Rx tab",
-      "Patient demographics",
-      "Prescriber selection",
-      "Product search (DIN)",
-      "Directions field",
-      "Dispense quantity",
-      "Save & queue label",
+      "New Rx tab (Ctrl+N)",
+      "Patient search (Ctrl+F)",
+      "Prescriber (F2)",
+      "Product search (F6)",
+      "Sig & quantity",
     ],
   },
   {
     id: "winrx",
     name: "WinRx / Nexsys",
+    shortName: "WinRx",
     vendor: "Nexsys / Emergis",
+    targetSystem: "WINRX",
     shortcut: "Alt + Insert",
-    accent: "text-emerald-700 bg-emerald-50 border-emerald-200",
+    accent:
+      "text-emerald-700 bg-emerald-50 border-emerald-200 dark:text-emerald-300 dark:bg-emerald-950/50 dark:border-emerald-900",
+    keyMap: { patient: "Alt+C", prescriber: "Alt+D", drug: "Alt+P" },
     entryOrder: [
-      "Prescription entry grid",
-      "Client record",
-      "Doctor record",
-      "Drug code field",
+      "Client record (Alt+C)",
+      "Doctor record (Alt+D)",
+      "Drug code (Alt+P)",
       "Sig field",
-      "Qty / refills",
-      "Post to profile",
+      "Quantity",
     ],
   },
 ];
@@ -68,57 +79,65 @@ export function getPmsProfile(id: PmsId): PmsProfile {
 
 export interface KeystrokeStep {
   id: string;
+  /** Index of the medication this step belongs to, or -1 for session steps. */
+  medicationIndex: number;
   label: string;
   value: string;
   keys: string;
 }
 
 /**
- * Builds the ordered keystroke plan the desktop helper replays into the target
- * Pharmacy Management System window.
+ * Mirrors the exact keystroke order the desktop helper replays for each
+ * medication, so the trace shown in the UI matches what happens on screen.
  */
-export function buildKeystrokePlan(script: Script, pms: PmsProfile): KeystrokeStep[] {
+export function buildKeystrokePlan(script: Script, profile: PmsProfile): KeystrokeStep[] {
   const steps: KeystrokeStep[] = [
-    { id: "focus", label: "Focus window", value: pms.name, keys: `${pms.shortcut} → FOCUS` },
-    { id: "patient", label: "Patient name", value: script.patient.full_name, keys: "patient field" },
-    { id: "dob", label: "Date of birth", value: script.patient.dob, keys: "tab → dob" },
-    { id: "hcn", label: "Health card", value: script.patient.health_card_num, keys: "tab → health card" },
     {
-      id: "prescriber",
-      label: "Prescriber",
-      value: `${script.prescriber.name} (${script.prescriber.license_number || "NO LICENCE"})`,
-      keys: "prescriber lookup",
+      id: "focus",
+      medicationIndex: -1,
+      label: "Focus PMS window",
+      value: profile.name,
+      keys: `${profile.shortcut} → FOCUS`,
     },
   ];
 
-  script.medications.forEach((med: Medication, index: number) => {
-    const prefix = `med-${index}`;
+  script.medications.forEach((medication, index) => {
     steps.push({
-      id: `${prefix}-din`,
-      label: `Drug ${index + 1} — DIN`,
-      value: med.is_compound ? "COMPOUND (manual build)" : med.din || "NO DIN",
-      keys: "product search field",
+      id: `med-${index}-patient`,
+      medicationIndex: index,
+      label: `Drug ${index + 1} · patient lookup`,
+      value: script.patient.health_card_num,
+      keys: profile.keyMap.patient,
     });
     steps.push({
-      id: `${prefix}-name`,
-      label: `Drug ${index + 1} — product`,
-      value: `${med.drug_name} ${med.strength}`.trim(),
-      keys: "autocomplete selection",
+      id: `med-${index}-prescriber`,
+      medicationIndex: index,
+      label: `Drug ${index + 1} · prescriber`,
+      value: `${script.prescriber.name} (${script.prescriber.license_number || "NO LICENCE"})`,
+      keys: profile.keyMap.prescriber,
     });
     steps.push({
-      id: `${prefix}-sig`,
-      label: `Drug ${index + 1} — sig`,
-      value: med.sig,
-      keys: "directions field",
+      id: `med-${index}-din`,
+      medicationIndex: index,
+      label: `Drug ${index + 1} · DIN`,
+      value: medication.is_compound ? "compound — skipped" : medication.din || "no DIN",
+      keys: medication.is_compound ? "SKIP" : profile.keyMap.drug,
     });
     steps.push({
-      id: `${prefix}-qty`,
-      label: `Drug ${index + 1} — qty / refills`,
-      value: `${med.quantity} / ${med.refills}`,
-      keys: "qty → refills",
+      id: `med-${index}-sig`,
+      medicationIndex: index,
+      label: `Drug ${index + 1} · sig`,
+      value: medication.sig,
+      keys: "Ctrl + V",
+    });
+    steps.push({
+      id: `med-${index}-qty`,
+      medicationIndex: index,
+      label: `Drug ${index + 1} · quantity`,
+      value: String(medication.quantity),
+      keys: "Tab → typewrite",
     });
   });
 
-  steps.push({ id: "commit", label: "Commit", value: "Save to patient profile", keys: "Ctrl + S" });
   return steps;
 }

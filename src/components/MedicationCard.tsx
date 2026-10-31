@@ -4,6 +4,7 @@ import { ConfidenceField } from "@/components/ConfidenceField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { medicationIssues, medicationLevel } from "@/lib/confidence";
+import { toPmsSig } from "@/lib/sig";
 import { DIN_STATUS_META } from "@/services/dpd";
 import { cn } from "@/lib/utils";
 import type { Medication, Script } from "@/lib/types";
@@ -146,6 +147,14 @@ export function MedicationCard({
           active={activeField === focusKey}
           onFocus={() => onFocusField(focusKey)}
           onChange={(value) => patch({ sig: value })}
+          hint={
+            <span className="flex flex-wrap items-center gap-1.5">
+              <span className="uppercase tracking-wide text-muted-foreground">Sent to PMS as</span>
+              <span className="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-foreground">
+                {toPmsSig(medication.sig) || "—"}
+              </span>
+            </span>
+          }
         />
       </div>
 

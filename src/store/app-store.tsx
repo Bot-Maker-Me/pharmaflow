@@ -2,8 +2,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { resolveDinStatus } from "@/services/dpd";
-import { LocalAgentClient, type AgentStatus, type PushResult } from "@/services/agent";
-import { toExtractionPayload } from "@/services/mockVision";
+import { LocalHelperClient, type HelperInfo, type HelperStatus, type PushOutcome } from "@/services/agent";
 import { createSampleDocument, createSampleDocuments, uid } from "@/services/mockVision";
 import { countPdfPages } from "@/services/pdf";
 import { requestExtraction } from "@/services/vision";
@@ -34,7 +33,8 @@ interface AppStoreValue {
   scripts: Script[];
   settings: Settings;
   pipeline: PipelineState;
-  agentStatus: AgentStatus;
+  helperStatus: HelperStatus;
+  helperInfo: HelperInfo;
   activity: ActivityEntry[];
   stats: {
     pending: number;
@@ -60,9 +60,9 @@ interface AppStoreValue {
   pushScript: (
     scriptId: string,
     onStep: (step: KeystrokeStep, index: number, total: number) => void,
-  ) => Promise<PushResult>;
+  ) => Promise<PushOutcome>;
   createManualScript: (input: ManualScriptInput) => void;
-  reconnectAgent: () => void;
+  checkHelper: () => Promise<void>;
   resetQueue: () => void;
 }
 
@@ -107,7 +107,8 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     stage: "",
     progress: 0,
   });
-  const [agentStatus, setAgentStatus] = React.useState<AgentStatus>("disconnected");
+  const [helperStatus, setHelperStatus] = React.useState<HelperStatus>("checking");
+  const [helperInfo, setHelperInfo] = React.useState<HelperInfo>({});
   const [activity, setActivity] = React.useState<ActivityEntry[]>([
     {
       id: "seed",
@@ -117,22 +118,39 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     },
   ]);
 
-  const agentRef = React.useRef<LocalAgentClient>();
-  if (!agentRef.current) agentRef.current = new LocalAgentClient();
+  const helperRef = React.useRef<LocalHelperClient>();
+  if (!helperRef.current) helperRef.current = new LocalHelperClient();
 
   const settingsRef = React.useRef(settings);
   settingsRef.current = settings;
 
   const sampleCursor = React.useRef(0);
 
+  // Poll the desktop helper's /health endpoint so the header indicator is live.
   React.useEffect(() => {
-    const agent = agentRef.current!;
-    const unsubscribe = agent.subscribe(setAgentStatus);
-    agent.connect(settings.agentUrl);
+    const client = helperRef.current!;
+    const unsubscribe = client.subscribe(setHelperStatus);
+    let cancelled = false;
+
+    const probe = async () => {
+      const info = await client.check(settings.helperUrl);
+      if (!cancelled) setHelperInfo(info);
+    };
+
+    probe();
+    const timer = window.setInterval(probe, 10000);
     return () => {
+      cancelled = true;
+      window.clearInterval(timer);
       unsubscribe();
     };
-  }, [settings.agentUrl]);
+  }, [settings.helperUrl]);
+
+  React.useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle("dark", settings.theme === "dark");
+    root.style.colorScheme = settings.theme;
+  }, [settings.theme]);
 
   React.useEffect(() => {
     try {
@@ -355,37 +373,52 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     async (
       scriptId: string,
       onStep: (step: KeystrokeStep, index: number, total: number) => void,
-    ): Promise<PushResult> => {
+    ): Promise<PushOutcome> => {
       const script = scripts.find((candidate) => candidate.id === scriptId);
       if (!script) {
-        return { ok: false, mode: "simulated", steps: [] };
+        return {
+          ok: false,
+          mode: "simulated",
+          message: "Prescription not found in the queue.",
+          steps: [],
+          requests: [],
+        };
       }
-      const agent = agentRef.current!;
-      const document = documents.find((candidate) => candidate.id === script.documentId);
-      const payload = toExtractionPayload(script, (document?.pageCount ?? 1) > 1);
-      const result = await agent.pushScript(script, settingsRef.current, payload, onStep);
 
-      setScripts((prev) =>
-        prev.map((candidate) =>
-          candidate.id === scriptId
-            ? {
-                ...candidate,
-                status: "pushed",
-                pushedAt: new Date().toISOString(),
-                pushedTo: settingsRef.current.pms,
-              }
-            : candidate,
-        ),
+      const client = helperRef.current!;
+      const result = await client.pushScript(
+        script,
+        settingsRef.current.pms,
+        settingsRef.current.helperUrl,
+        onStep,
       );
+
+      if (result.ok) {
+        setScripts((prev) =>
+          prev.map((candidate) =>
+            candidate.id === scriptId
+              ? {
+                  ...candidate,
+                  status: "pushed",
+                  pushedAt: new Date().toISOString(),
+                  pushedTo: settingsRef.current.pms,
+                }
+              : candidate,
+          ),
+        );
+      }
+
       logActivity(
-        result.mode === "agent"
-          ? `Keystrokes sent to the desktop helper for ${script.patient.full_name}`
-          : `Simulated keystroke push for ${script.patient.full_name} (helper offline)`,
-        result.mode === "agent" ? "ok" : "warn",
+        result.mode === "helper"
+          ? `${result.message} (${script.patient.full_name})`
+          : `Simulated keystroke push for ${script.patient.full_name} — helper offline`,
+        result.ok ? (result.mode === "helper" ? "ok" : "warn") : "warn",
       );
+
+      if (!result.ok) toast.error(result.message);
       return result;
     },
-    [documents, logActivity, scripts],
+    [logActivity, scripts],
   );
 
   const createManualScript = React.useCallback(
@@ -460,10 +493,12 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     [logActivity],
   );
 
-  const reconnectAgent = React.useCallback(() => {
-    const agent = agentRef.current!;
-    agent.disconnect();
-    agent.connect(settingsRef.current.agentUrl);
+  const checkHelper = React.useCallback(async () => {
+    const client = helperRef.current!;
+    const info = await client.check(settingsRef.current.helperUrl);
+    setHelperInfo(info);
+    if (info.error) toast.error(`Local helper unreachable at ${settingsRef.current.helperUrl}`);
+    else toast.success(`Local helper ${info.version ?? ""} connected`.trim());
   }, []);
 
   const resetQueue = React.useCallback(() => {
@@ -500,7 +535,8 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     scripts,
     settings,
     pipeline,
-    agentStatus,
+    helperStatus,
+    helperInfo,
     activity,
     stats,
     documentById: (id) => documents.find((document) => document.id === id),
@@ -518,7 +554,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     verifyScript,
     pushScript,
     createManualScript,
-    reconnectAgent,
+    checkHelper,
     resetQueue,
   };
 

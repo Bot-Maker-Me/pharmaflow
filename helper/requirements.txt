@@ -1,0 +1,11 @@
+Flask>=3.0.0
+flask-cors>=4.0.0
+pyautogui>=0.9.54
+pyperclip>=1.8.2
+
+# Optional: system-tray shell (the helper runs headless if these are absent)
+pystray>=0.19.5
+Pillow>=10.0.0
+
+# Optional: packaging into a single .exe
+# pyinstaller>=6.6.0

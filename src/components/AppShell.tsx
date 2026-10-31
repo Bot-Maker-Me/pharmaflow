@@ -1,8 +1,8 @@
 import { Activity, Home, ListChecks, Pill, Settings2, ShieldCheck } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
-import { AgentStatusPill } from "@/components/AgentStatusPill";
-import { PmsSelector } from "@/components/PmsSelector";
+import { HelperStatus } from "@/components/HelperStatus";
+import { QuickActions } from "@/components/QuickActions";
 import { useAppStore } from "@/store/app-store";
 import { cn } from "@/lib/utils";
 
@@ -19,7 +19,7 @@ function titleFor(pathname: string): { title: string; subtitle: string } {
   if (pathname.startsWith("/queue"))
     return { title: "Prescription queue", subtitle: "Every script captured from the intake pipeline" };
   if (pathname.startsWith("/settings"))
-    return { title: "Settings", subtitle: "Extraction, DIN verification and desktop helper" };
+    return { title: "Settings", subtitle: "Extraction, DIN verification and the local desktop helper" };
   return { title: "Prescription intake", subtitle: "Vision AI ingestion of faxed prescriptions" };
 }
 
@@ -30,8 +30,8 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <aside className="flex w-16 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:w-64">
-        <div className="flex h-16 items-center gap-3 border-b border-sidebar-border px-3 lg:px-5">
+      <aside className="flex w-16 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:w-60">
+        <div className="flex h-16 items-center gap-3 border-b border-sidebar-border px-3 lg:px-4">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sidebar-accent/20 text-sidebar-accent ring-1 ring-sidebar-accent/40">
             <Pill className="h-5 w-5" />
           </span>
@@ -59,7 +59,7 @@ export function AppShell() {
               <item.icon className="h-4 w-4 shrink-0" />
               <span className="hidden lg:inline">{item.label}</span>
               {item.to === "/queue" && stats.pending > 0 ? (
-                <span className="ml-auto hidden rounded-full bg-sidebar-accent px-2 py-0.5 text-[11px] font-semibold text-white lg:inline">
+                <span className="ml-auto hidden rounded-full bg-sidebar-accent px-2 py-0.5 text-[11px] font-semibold text-slate-900 lg:inline">
                   {stats.pending}
                 </span>
               ) : null}
@@ -75,21 +75,23 @@ export function AppShell() {
             <p className="mt-1 text-xs text-sidebar-muted">
               Keystroke automation runs on the pharmacy workstation.
             </p>
-            <div className="mt-2">
-              <AgentStatusPill />
-            </div>
+            <p className="mt-2 font-mono text-[11px] text-sidebar-muted">localhost:48120</p>
           </div>
         </div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="z-20 flex h-16 shrink-0 items-center gap-3 border-b border-border bg-card px-4 lg:px-6">
-          <div className="min-w-0 flex-1">
+        <header className="z-20 flex h-16 shrink-0 items-center gap-2 border-b border-border bg-card px-3 lg:px-5">
+          <div className="hidden min-w-0 flex-1 xl:block">
             <h1 className="truncate text-sm font-semibold text-foreground lg:text-base">{title}</h1>
-            <p className="hidden truncate text-xs text-muted-foreground sm:block">{subtitle}</p>
+            <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
           </div>
-          <PmsSelector />
-          <AgentStatusPill className="lg:hidden" />
+
+          <div className="flex min-w-0 flex-1 items-center gap-2 xl:flex-none">
+            <HelperStatus />
+          </div>
+
+          <QuickActions className="ml-auto" />
         </header>
 
         <main className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">

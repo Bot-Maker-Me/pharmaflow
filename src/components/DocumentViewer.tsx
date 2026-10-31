@@ -85,7 +85,7 @@ export function DocumentViewer({
   const wrapped = rotation % 360 !== 0;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-slate-100">
+    <div className="flex h-full min-h-0 flex-col bg-viewer">
       <div className="flex h-12 shrink-0 items-center gap-1 border-b border-border bg-card px-3">
         <Button
           variant="ghost"
@@ -161,7 +161,7 @@ export function DocumentViewer({
       <div className="min-h-0 flex-1 overflow-auto scrollbar-thin bg-grid">
         <div className="flex min-h-full items-start justify-center p-6">
           <div
-            className="relative bg-white shadow-xl ring-1 ring-slate-300"
+            className="relative bg-white shadow-xl ring-1 ring-slate-300 dark:ring-slate-700"
             style={{
               width: usesCanvas ? undefined : Math.round(BASE_IMAGE_WIDTH * zoom),
               transform: wrapped ? `rotate(${rotation}deg)` : undefined,

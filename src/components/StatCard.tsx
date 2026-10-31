@@ -18,9 +18,9 @@ export function StatCard({
 }) {
   const toneClass = {
     default: "bg-secondary text-secondary-foreground",
-    success: "bg-emerald-50 text-emerald-600",
-    warning: "bg-amber-50 text-amber-600",
-    info: "bg-sky-50 text-sky-600",
+    success: "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400",
+    warning: "bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-400",
+    info: "bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400",
   }[tone];
 
   return (

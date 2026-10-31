@@ -28,31 +28,31 @@ export const LEVEL_STYLES: Record<ConfidenceLevel, LevelStyle> = {
   high: {
     label: "High confidence",
     dot: "bg-emerald-500",
-    chip: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    chip: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-900",
     border: "border-l-emerald-500",
     ring: "ring-emerald-400",
-    text: "text-emerald-600",
-    soft: "bg-emerald-50",
+    text: "text-emerald-600 dark:text-emerald-400",
+    soft: "bg-emerald-50 dark:bg-emerald-950/40",
     hex: "#10b981",
   },
   medium: {
     label: "Needs a quick check",
     dot: "bg-amber-500",
-    chip: "bg-amber-50 text-amber-700 border-amber-200",
+    chip: "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-900",
     border: "border-l-amber-500",
     ring: "ring-amber-400",
-    text: "text-amber-600",
-    soft: "bg-amber-50",
+    text: "text-amber-600 dark:text-amber-400",
+    soft: "bg-amber-50 dark:bg-amber-950/40",
     hex: "#f59e0b",
   },
   low: {
     label: "Low confidence",
     dot: "bg-red-500",
-    chip: "bg-red-50 text-red-700 border-red-200",
+    chip: "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-300 dark:border-red-900",
     border: "border-l-red-500",
     ring: "ring-red-400",
-    text: "text-red-600",
-    soft: "bg-red-50",
+    text: "text-red-600 dark:text-red-400",
+    soft: "bg-red-50 dark:bg-red-950/40",
     hex: "#ef4444",
   },
 };
@@ -117,7 +117,19 @@ export function formatPercent(score: number): string {
 }
 
 export const STATUS_STYLES: Record<Script["status"], { label: string; chip: string; dot: string }> = {
-  pending: { label: "Pending", chip: "bg-slate-100 text-slate-700 border-slate-200", dot: "bg-slate-400" },
-  verified: { label: "Verified", chip: "bg-sky-50 text-sky-700 border-sky-200", dot: "bg-sky-500" },
-  pushed: { label: "Pushed", chip: "bg-emerald-50 text-emerald-700 border-emerald-200", dot: "bg-emerald-500" },
+  pending: {
+    label: "Pending",
+    chip: "bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700",
+    dot: "bg-slate-400",
+  },
+  verified: {
+    label: "Verified",
+    chip: "bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-900",
+    dot: "bg-sky-500",
+  },
+  pushed: {
+    label: "Pushed",
+    chip: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-900",
+    dot: "bg-emerald-500",
+  },
 };

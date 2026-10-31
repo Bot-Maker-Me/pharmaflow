@@ -40,11 +40,14 @@
   - `vision.ts` — extraction client. `demo` mode uses the offline generator; `live` mode POSTs to `{apiBaseUrl}/api/extract`.
   - `mockVision.ts` — deterministic sample-data generator that also renders the fax pages as SVGs and emits the field bounding boxes.
   - `dpd.ts` — Health Canada DIN check digit + Drug Product Database cross-reference.
-  - `agent.ts` — `LocalAgentClient`, the WebSocket bridge (`ws://localhost:48120`) to the Windows desktop helper; degrades to a simulated keystroke run when the helper is absent.
+  - `agent.ts` — `LocalHelperClient`: probes `GET {helperUrl}/health` and pushes with `POST {helperUrl}/autofill`; degrades to a simulated keystroke run when the helper is absent.
   - `pdf.ts` — pdf.js loading/rendering for uploaded multi-page faxes.
-- `src/lib/pms.ts` defines the supported Pharmacy Management Systems and the keystroke entry plan.
-- `src/store/app-store.tsx` is the single source of truth for queue state, settings (persisted to localStorage) and agent status. Reach it with the `useAppStore()` hook.
-- Confidence colour coding lives in `src/lib/confidence.ts` (green > high, amber for medium / unverified DIN / missing licence, red for low or illegible).
+- `src/lib/payload.ts` builds the keystroke payload contract (`{ target_system, data: { patient_lookup, prescriber_license, din_code, quantity, sig_text } }`), one request per medication. `src/lib/sig.ts` converts plain-English directions into PMS Latin abbreviations.
+- `helper/kroll_tray_helper.py` is the companion Flask helper (PyInstaller-ready) that replays the payload as keystrokes. Keep its contract in sync with `src/lib/payload.ts`.
+- `src/lib/pms.ts` defines the supported PMS profiles (target system, key map, hotkey) and the keystroke trace plan.
+- `src/store/app-store.tsx` is the single source of truth for queue state, settings (persisted to localStorage), theme and helper status. Reach it with the `useAppStore()` hook.
+- Confidence colour coding lives in `src/lib/confidence.ts` (green > high, amber for medium / unverified DIN / missing licence, red for low or illegible). Every level style needs `dark:` variants.
+- Theming is class-based (`dark` on `<html>`), driven by `settings.theme`; palette is slate surfaces with indigo accents.
 
 ## Do Not
 - Do not edit files inside `src/components/ui/` (the shadcn library files). Create a new wrapper component instead if customization is needed.

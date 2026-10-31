@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fieldLevel, scriptIssues, scriptLevel } from "@/lib/confidence";
+import { useResizable } from "@/hooks/use-resizable";
 import { getPmsProfile } from "@/lib/pms";
 import { useAppStore } from "@/store/app-store";
 import { cn } from "@/lib/utils";
@@ -37,6 +38,7 @@ export default function Verify() {
   const [page, setPage] = React.useState(active?.pageNumber ?? 1);
   const [activeField, setActiveField] = React.useState<string | undefined>(undefined);
   const [pushOpen, setPushOpen] = React.useState(false);
+  const panel = useResizable({ initial: 520, min: 380, max: 860 });
 
   React.useEffect(() => {
     if (active) setPage(active.pageNumber);
@@ -206,7 +208,20 @@ export default function Verify() {
           />
         </div>
 
-        <div className="flex w-full max-w-[540px] shrink-0 flex-col border-l border-border bg-secondary/30">
+        <div
+          {...panel.handleProps}
+          className={cn(
+            "group relative w-1.5 shrink-0 cursor-col-resize bg-border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            panel.dragging ? "bg-primary" : "hover:bg-primary/50",
+          )}
+        >
+          <span className="pointer-events-none absolute left-1/2 top-1/2 h-10 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary-foreground/70" />
+        </div>
+
+        <div
+          className="flex shrink-0 flex-col border-l border-border bg-secondary/30"
+          style={{ width: panel.width }}
+        >
           <div className="flex items-center gap-2 border-b border-border bg-card px-4 py-2.5">
             <Sparkles className="h-4 w-4 text-primary" />
             <p className="text-xs font-semibold text-foreground">AI extraction — edit before pushing</p>

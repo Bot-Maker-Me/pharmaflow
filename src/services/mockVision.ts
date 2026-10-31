@@ -1,11 +1,4 @@
-import type {
-  BBox,
-  DocumentPage,
-  ExtractionPayload,
-  Medication,
-  ProcessedDocument,
-  Script,
-} from "@/lib/types";
+import type { BBox, DocumentPage, Medication, ProcessedDocument, Script } from "@/lib/types";
 import { dinFromBase, resolveDinStatus } from "./dpd";
 
 /**
@@ -695,38 +688,4 @@ export function createSyntheticExtraction(document: ProcessedDocument): Script[]
   }
 
   return scripts;
-}
-
-/** Serialise a verified script back into the wire format pushed to the helper. */
-export function toExtractionPayload(script: Script, isMultiPage: boolean): ExtractionPayload {
-  return {
-    document_metadata: {
-      is_multi_page: isMultiPage,
-      page_number: script.pageNumber,
-      is_prescription: true,
-    },
-    patient: {
-      full_name: script.patient.full_name,
-      dob: script.patient.dob,
-      health_card_num: script.patient.health_card_num,
-      confidence: script.patient.confidence,
-    },
-    prescriber: {
-      name: script.prescriber.name,
-      license_number: script.prescriber.license_number,
-      confidence: script.prescriber.confidence,
-    },
-    medications: script.medications.map((med) => ({
-      drug_name: med.drug_name,
-      din: med.din,
-      strength: med.strength,
-      quantity: med.quantity,
-      refills: med.refills,
-      sig: med.sig,
-      is_compound: med.is_compound,
-      confidence: med.confidence,
-    })),
-    overall_confidence: script.overallConfidence,
-    illegible_handwriting: script.illegible,
-  };
 }

@@ -1,39 +1,64 @@
-import type { Script, Settings } from "@/lib/types";
+import type { PmsId, Script } from "@/lib/types";
 import { buildKeystrokePlan, getPmsProfile, type KeystrokeStep } from "@/lib/pms";
+import { buildHelperPayloads, type HelperPayload } from "@/lib/payload";
 
 /**
- * Bridge to the local desktop helper (the Windows background executable that
- * replays keystrokes into legacy Pharmacy Management Systems).
+ * Client for the local desktop helper (`helper/kroll_tray_helper.py`).
  *
- * The helper listens on `http://localhost:48120` and exposes a WebSocket on the
- * same port. Messages are JSON:
+ * The helper is a Flask process bound to 127.0.0.1:48120 that replays verified
+ * prescriptions as keystrokes into the focused Pharmacy Management System.
  *
- *   { "type": "push_prescription", "pms": "kroll", "payload": {...}, "steps": [...] }
- *   { "type": "ack", "script_id": "...", "steps_completed": 12 }
+ *   GET  /health   -> liveness probe used by the header status indicator
+ *   POST /autofill -> one call per medication, using the payload contract below
  *
- * When no helper is installed the client degrades gracefully to a simulated
- * keystroke run so technicians can still validate the intake data.
+ * When the helper is not installed the client degrades to a simulated run so
+ * technicians can still validate intake data.
  */
 
-export type AgentStatus = "disconnected" | "connecting" | "connected" | "simulated";
+export type HelperStatus = "connected" | "offline" | "checking";
 
-export interface PushResult {
-  ok: boolean;
-  mode: "agent" | "simulated";
-  steps: KeystrokeStep[];
+export interface HelperInfo {
+  version?: string;
+  targetSystems?: string[];
+  keystrokesAvailable?: boolean;
+  checkedAt?: string;
+  error?: string;
 }
+
+export interface PushOutcome {
+  ok: boolean;
+  mode: "helper" | "simulated";
+  message: string;
+  steps: KeystrokeStep[];
+  requests: HelperPayload[];
+}
+
+const HEALTH_TIMEOUT_MS = 2500;
+const POST_TIMEOUT_MS = 20000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export class LocalAgentClient {
-  private socket: WebSocket | null = null;
-  private url = "";
-  private listeners = new Set<(status: AgentStatus) => void>();
-  status: AgentStatus = "disconnected";
+function normaliseBase(url: string): string {
+  return url.trim().replace(/\/+$/, "");
+}
 
-  subscribe(listener: (status: AgentStatus) => void): () => void {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export class LocalHelperClient {
+  status: HelperStatus = "checking";
+  private listeners = new Set<(status: HelperStatus) => void>();
+
+  subscribe(listener: (status: HelperStatus) => void): () => void {
     this.listeners.add(listener);
     listener(this.status);
     return () => {
@@ -41,80 +66,124 @@ export class LocalAgentClient {
     };
   }
 
-  private setStatus(status: AgentStatus) {
+  private setStatus(status: HelperStatus) {
     if (this.status === status) return;
     this.status = status;
     this.listeners.forEach((listener) => listener(status));
   }
 
-  connect(url: string) {
-    if (this.url === url && this.socket) return;
-    this.disconnect();
-    this.url = url;
-    this.setStatus("connecting");
+  /** Probe `GET /health`. Never throws — an unreachable helper is "offline". */
+  async check(baseUrl: string): Promise<HelperInfo> {
     try {
-      const socket = new WebSocket(url);
-      this.socket = socket;
-      socket.onopen = () => this.setStatus("connected");
-      socket.onerror = () => this.setStatus("simulated");
-      socket.onclose = () => this.setStatus("simulated");
-    } catch {
-      this.setStatus("simulated");
+      const response = await fetchWithTimeout(
+        `${normaliseBase(baseUrl)}/health`,
+        { method: "GET", headers: { Accept: "application/json" } },
+        HEALTH_TIMEOUT_MS,
+      );
+      if (!response.ok) throw new Error(`helper responded ${response.status}`);
+      const body = (await response.json()) as {
+        status?: string;
+        version?: string;
+        target_systems?: string[];
+        keystrokes_available?: boolean;
+      };
+      this.setStatus("connected");
+      return {
+        version: body.version,
+        targetSystems: body.target_systems,
+        keystrokesAvailable: body.keystrokes_available,
+        checkedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      this.setStatus("offline");
+      return {
+        checkedAt: new Date().toISOString(),
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
-  }
-
-  disconnect() {
-    if (this.socket) {
-      this.socket.onopen = null;
-      this.socket.onerror = null;
-      this.socket.onclose = null;
-      try {
-        this.socket.close();
-      } catch {
-        /* ignore */
-      }
-      this.socket = null;
-    }
-    this.url = "";
-    this.setStatus("disconnected");
   }
 
   /**
-   * Streams the structured prescription into the target PMS. `onStep` fires as
-   * each field is committed so the UI can render a live keystroke trace.
+   * Streams the prescription into the target PMS. `onStep` fires as each field
+   * is committed so the UI can render a live keystroke trace in step with the
+   * driver running on the workstation.
    */
   async pushScript(
     script: Script,
-    settings: Settings,
-    payload: unknown,
+    pmsId: PmsId,
+    helperUrl: string,
     onStep: (step: KeystrokeStep, index: number, total: number) => void,
-  ): Promise<PushResult> {
-    const profile = getPmsProfile(settings.pms);
-    const plan = buildKeystrokePlan(script, profile);
-    const socket = this.socket;
-    const viaAgent = this.status === "connected" && socket !== null;
+  ): Promise<PushOutcome> {
+    const profile = getPmsProfile(pmsId);
+    const steps = buildKeystrokePlan(script, profile);
+    const requests = buildHelperPayloads(script, pmsId);
+    const base = normaliseBase(helperUrl);
+    const reachable = this.status === "connected";
 
-    if (viaAgent && socket) {
-      socket.send(
-        JSON.stringify({
-          type: "push_prescription",
-          pms: profile.id,
-          script_id: script.id,
-          shortcut: profile.shortcut,
-          payload,
-          steps: plan,
-        }),
-      );
+    const postPromise: Promise<string | null> = reachable
+      ? this.postAll(base, requests)
+      : Promise.resolve(null);
+
+    await delay(160);
+    for (let index = 0; index < steps.length; index += 1) {
+      onStep(steps[index], index, steps.length);
+      await delay(reachable ? 170 : 190);
     }
 
-    await delay(180);
-    for (let index = 0; index < plan.length; index += 1) {
-      onStep(plan[index], index, plan.length);
-      await delay(viaAgent ? 110 : 180);
+    const error = await postPromise;
+
+    if (!reachable) {
+      return {
+        ok: true,
+        mode: "simulated",
+        message: `Helper offline at ${base} — keystrokes simulated locally.`,
+        steps,
+        requests,
+      };
     }
 
-    return { ok: true, mode: viaAgent ? "agent" : "simulated", steps: plan };
+    if (error) {
+      return { ok: false, mode: "helper", message: error, steps, requests };
+    }
+
+    return {
+      ok: true,
+      mode: "helper",
+      message: `${requests.length} prescription line(s) typed into ${profile.name}.`,
+      steps,
+      requests,
+    };
+  }
+
+  /** POST one `/autofill` call per medication. Returns an error message or null. */
+  private async postAll(base: string, requests: HelperPayload[]): Promise<string | null> {
+    for (const payload of requests) {
+      try {
+        const response = await fetchWithTimeout(
+          `${base}/autofill`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          },
+          POST_TIMEOUT_MS,
+        );
+
+        const body = (await response.json().catch(() => null)) as { message?: string } | null;
+        if (!response.ok) {
+          this.setStatus("offline");
+          return body?.message ?? `Helper returned HTTP ${response.status}`;
+        }
+      } catch (error) {
+        this.setStatus("offline");
+        return error instanceof Error && error.name === "AbortError"
+          ? "Autofill timed out — is the PMS window responsive?"
+          : `Could not reach the helper at ${base}.`;
+      }
+    }
+    return null;
   }
 }
 
-export const AGENT_PORT = 48120;
+export const HELPER_PORT = 48120;
+export const DEFAULT_HELPER_URL = `http://localhost:${HELPER_PORT}`;
