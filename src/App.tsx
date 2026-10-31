@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Index from "@/pages/Index";
+import Landing from "@/pages/Landing";
 import NotFound from "@/pages/NotFound";
 import Queue from "@/pages/Queue";
 import Settings from "@/pages/Settings";
@@ -15,14 +16,31 @@ export default function App() {
     <AppStoreProvider>
       <TooltipProvider delayDuration={200}>
         <Routes>
-          <Route element={<AppShell />}>
+          {/* Public marketing home */}
+          <Route path="/" element={<Landing />} />
+
+          {/* Application shell */}
+          <Route path="/app" element={<AppShell />}>
             <Route index element={<Index />} />
             <Route path="verify" element={<Verify />} />
             <Route path="verify/:scriptId" element={<Verify />} />
             <Route path="queue" element={<Queue />} />
             <Route path="settings" element={<Settings />} />
-            <Route path="*" element={<NotFound />} />
           </Route>
+
+          {/* Keep old paths working by redirecting into /app */}
+          <Route path="/verify" element={<AppShell />}>
+            <Route index element={<Verify />} />
+            <Route path=":scriptId" element={<Verify />} />
+          </Route>
+          <Route path="/queue" element={<AppShell />}>
+            <Route index element={<Queue />} />
+          </Route>
+          <Route path="/settings" element={<AppShell />}>
+            <Route index element={<Settings />} />
+          </Route>
+
+          <Route path="*" element={<NotFound />} />
         </Routes>
         <Toaster />
       </TooltipProvider>
