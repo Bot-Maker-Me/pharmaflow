@@ -33,6 +33,19 @@
 - **Dates**: use the native `Date` API or `date-fns` if formatting gets complex.
 - **Tables**: build with Tailwind + shadcn `Table` components; use `@tanstack/react-table` only for complex sorting/filtering.
 
+## PharmFlow App Architecture
+- Feature: **PharmFlow AI** — Vision AI prescription intake + keystroke automation for Canadian pharmacies.
+- `src/lib/types.ts` is the shared domain model (Script, Medication, ProcessedDocument, Settings). Extend it first when adding data.
+- `src/services/` holds all I/O and integrations:
+  - `vision.ts` — extraction client. `demo` mode uses the offline generator; `live` mode POSTs to `{apiBaseUrl}/api/extract`.
+  - `mockVision.ts` — deterministic sample-data generator that also renders the fax pages as SVGs and emits the field bounding boxes.
+  - `dpd.ts` — Health Canada DIN check digit + Drug Product Database cross-reference.
+  - `agent.ts` — `LocalAgentClient`, the WebSocket bridge (`ws://localhost:48120`) to the Windows desktop helper; degrades to a simulated keystroke run when the helper is absent.
+  - `pdf.ts` — pdf.js loading/rendering for uploaded multi-page faxes.
+- `src/lib/pms.ts` defines the supported Pharmacy Management Systems and the keystroke entry plan.
+- `src/store/app-store.tsx` is the single source of truth for queue state, settings (persisted to localStorage) and agent status. Reach it with the `useAppStore()` hook.
+- Confidence colour coding lives in `src/lib/confidence.ts` (green > high, amber for medium / unverified DIN / missing licence, red for low or illegible).
+
 ## Do Not
 - Do not edit files inside `src/components/ui/` (the shadcn library files). Create a new wrapper component instead if customization is needed.
 - Do not introduce a new dependency for something an installed library already covers.

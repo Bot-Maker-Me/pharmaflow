@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 199 89% 32%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 173 80% 30%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 199 89% 32%;
+
+    --radius: 0.6rem;
+
+    --sidebar: 222 47% 11%;
+    --sidebar-foreground: 210 40% 96%;
+    --sidebar-muted: 215 22% 62%;
+    --sidebar-accent: 199 89% 42%;
+    --sidebar-border: 217 33% 20%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(215 20% 78%);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .bg-grid {
+    background-image: radial-gradient(hsl(214 32% 89%) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+}
