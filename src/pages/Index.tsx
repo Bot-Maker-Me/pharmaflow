@@ -133,13 +133,13 @@ export default function Index() {
               </div>
               <div className="flex items-center gap-2">
                 <ManualEntryDialog />
-                <Button variant="outline" onClick={() => navigate("/queue")}>
+                <Button variant="outline" onClick={() => navigate("/app/queue")}>
                   Open queue
                 </Button>
               </div>
             </CardHeader>
             <CardContent className="pt-0">
-              <QueueTable scripts={pending} onOpen={(id) => navigate(`/verify/${id}`)} compact />
+              <QueueTable scripts={pending} onOpen={(id) => navigate(`/app/verify/${id}`)} compact />
             </CardContent>
           </Card>
 
