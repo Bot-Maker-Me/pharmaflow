@@ -7,18 +7,18 @@ import { useAppStore } from "@/store/app-store";
 import { cn } from "@/lib/utils";
 
 const NAV = [
-  { to: "/", label: "Intake", icon: Home, end: true },
-  { to: "/verify", label: "Verification", icon: ShieldCheck, end: false },
-  { to: "/queue", label: "Queue", icon: ListChecks, end: false },
-  { to: "/settings", label: "Settings", icon: Settings2, end: false },
+  { to: "/app", label: "Intake", icon: Home, end: true },
+  { to: "/app/verify", label: "Verification", icon: ShieldCheck, end: false },
+  { to: "/app/queue", label: "Queue", icon: ListChecks, end: false },
+  { to: "/app/settings", label: "Settings", icon: Settings2, end: false },
 ];
 
 function titleFor(pathname: string): { title: string; subtitle: string } {
-  if (pathname.startsWith("/verify"))
+  if (pathname.includes("/verify"))
     return { title: "Verification workspace", subtitle: "Side-by-side document review and data entry" };
-  if (pathname.startsWith("/queue"))
+  if (pathname.includes("/queue"))
     return { title: "Prescription queue", subtitle: "Every script captured from the intake pipeline" };
-  if (pathname.startsWith("/settings"))
+  if (pathname.includes("/settings"))
     return { title: "Settings", subtitle: "Extraction, DIN verification and the local desktop helper" };
   return { title: "Prescription intake", subtitle: "Vision AI ingestion of faxed prescriptions" };
 }
@@ -36,7 +36,7 @@ export function AppShell() {
             <Pill className="h-5 w-5" />
           </span>
           <div className="hidden min-w-0 lg:block">
-            <p className="truncate text-sm font-semibold text-white">PharmFlow AI</p>
+            <p className="truncate text-sm font-semibold text-white">Pharma Flow</p>
             <p className="truncate text-[11px] text-sidebar-muted">Prescription intake assistant</p>
           </div>
         </div>
@@ -58,7 +58,7 @@ export function AppShell() {
             >
               <item.icon className="h-4 w-4 shrink-0" />
               <span className="hidden lg:inline">{item.label}</span>
-              {item.to === "/queue" && stats.pending > 0 ? (
+              {item.to === "/app/queue" && stats.pending > 0 ? (
                 <span className="ml-auto hidden rounded-full bg-sidebar-accent px-2 py-0.5 text-[11px] font-semibold text-slate-900 lg:inline">
                   {stats.pending}
                 </span>
