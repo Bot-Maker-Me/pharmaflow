@@ -1,6 +1,7 @@
 import type { ProcessedDocument, Script, Settings } from "@/lib/types";
 import { resolveDinStatus } from "./dpd";
 import { createSyntheticExtraction, uid } from "./mockVision";
+import { renderDocumentPages } from "./pageImages";
 
 /**
  * Vision AI extraction client.
@@ -128,6 +129,8 @@ function mapWireScript(
   };
 }
 
+const PAGES_PER_REQUEST = 3; // keeps each request well under Vercel's 4.5 MB body limit
+
 export async function requestExtraction(
   document: ProcessedDocument,
   settings: Settings,
@@ -136,43 +139,48 @@ export async function requestExtraction(
     return { scripts: createSyntheticExtraction(document), source: "demo" };
   }
 
-  const pageImages = document.pages
-    .map((page) => page.imageUrl)
-    .filter((url): url is string => Boolean(url));
-
-  if (!pageImages.length) {
-    return {
-      scripts: createSyntheticExtraction(document),
-      source: "demo",
-      warning: "No rendered page image available — fell back to the offline extractor.",
-    };
-  }
-
   try {
-    const response = await fetch(`${settings.apiBaseUrl.replace(/\/$/, "")}/api/extract`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        file_name: document.name,
-        page_count: document.pageCount,
-        system_prompt: EXTRACTION_SYSTEM_PROMPT,
-        page_images: pageImages,
-      }),
-    });
+    const pageImages = await renderDocumentPages(document);
+    const endpoint = `${settings.apiBaseUrl.replace(/\/$/, "")}/api/extract`;
+    const wireScripts: VisionScript[] = [];
 
-    if (!response.ok) throw new Error(`Extraction endpoint returned ${response.status}`);
+    for (let offset = 0; offset < pageImages.length; offset += PAGES_PER_REQUEST) {
+      const batch = pageImages.slice(offset, offset + PAGES_PER_REQUEST);
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(settings.apiToken ? { "x-access-token": settings.apiToken } : {}),
+        },
+        body: JSON.stringify({
+          file_name: document.name,
+          page_count: document.pageCount,
+          page_images: batch,
+        }),
+      });
 
-    const data = (await response.json()) as { scripts?: VisionScript[] };
-    const wireScripts = data.scripts ?? [];
-    if (!wireScripts.length) throw new Error("Extraction endpoint returned no scripts");
+      if (response.status === 401) throw new Error("Wrong or missing API access token (Settings)");
+      if (!response.ok) throw new Error(`Extraction endpoint returned ${response.status}`);
 
-    const scripts: Script[] = [];
-    wireScripts.forEach((wire, index) => {
-      const pageNumber = wire.document_metadata?.page_number ?? index + 1;
-      const totalOnPage = wireScripts.filter(
-        (candidate) => (candidate.document_metadata?.page_number ?? index + 1) === pageNumber,
-      ).length;
-      scripts.push(mapWireScript(wire, document, pageNumber, index, totalOnPage));
+      const data = (await response.json()) as { scripts?: VisionScript[] };
+      for (const wire of data.scripts ?? []) {
+        // Page numbers come back relative to the batch; make them document-absolute.
+        const pageNumber = (wire.document_metadata?.page_number ?? 1) + offset;
+        wireScripts.push({
+          ...wire,
+          document_metadata: { ...wire.document_metadata, page_number: pageNumber },
+        });
+      }
+    }
+
+    if (!wireScripts.length) throw new Error("No prescriptions were found in the document");
+
+    const scripts: Script[] = wireScripts.map((wire, index) => {
+      const pageNumber = wire.document_metadata?.page_number ?? 1;
+      const onPage = wireScripts.filter(
+        (candidate) => (candidate.document_metadata?.page_number ?? 1) === pageNumber,
+      );
+      return mapWireScript(wire, document, pageNumber, onPage.indexOf(wire), onPage.length || index + 1);
     });
 
     return { scripts, source: "live" };
@@ -180,7 +188,7 @@ export async function requestExtraction(
     return {
       scripts: createSyntheticExtraction(document),
       source: "demo",
-      warning: `Live extraction unavailable (${(error as Error).message}). Showing demo data.`,
+      warning: `Live extraction unavailable (${(error as Error).message}). Showing DEMO data — do not use it for real patients.`,
     };
   }
 }

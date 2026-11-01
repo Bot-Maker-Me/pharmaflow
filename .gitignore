@@ -24,3 +24,10 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+
+# python
+__pycache__/
+*.pyc
+helper/dist/
+helper/build/
+*.spec

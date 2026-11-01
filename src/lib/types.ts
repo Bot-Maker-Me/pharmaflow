@@ -108,7 +108,12 @@ export interface Settings {
   pms: PmsId;
   /** Base URL of the local desktop helper, e.g. http://localhost:48120 */
   helperUrl: string;
+  /** Shared secret for the local helper (config.ini [Helper] TOKEN). Empty = none. */
+  helperToken: string;
+  /** Base URL of the PharmFlow API. Empty = same origin (recommended on Vercel). */
   apiBaseUrl: string;
+  /** Access token for POST /api/extract (Vercel env EXTRACT_ACCESS_TOKEN). */
+  apiToken: string;
   extractionMode: "demo" | "live";
   autoAdvance: boolean;
   highThreshold: number;
@@ -119,7 +124,9 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   pms: "kroll",
   helperUrl: "http://localhost:48120",
-  apiBaseUrl: "http://localhost:8000",
+  helperToken: "",
+  apiBaseUrl: "",
+  apiToken: "",
   extractionMode: "demo",
   autoAdvance: true,
   highThreshold: 0.9,

@@ -1,113 +1,179 @@
 /**
- * POST /api/sync-queue
- * Receives payloads from local flow.py agents.
- * Auth: x-api-key must match AGENT_API_KEY.
- * Writes to Supabase via REST (no @supabase/supabase-js package required).
+ * /api/sync-queue
+ *
+ *   POST  (x-api-key)  receives payloads from local flow.py agents
+ *                      - normal payload   -> upsert into agent_sync_queue
+ *                      - {type:"heartbeat"} -> insert into agent_events
+ *   GET   (x-api-key)  lists recent rows so the dashboard / you can verify sync
+ *                      ?status=received&limit=50
+ *
+ * Auth: x-api-key must match AGENT_API_KEY (compared in constant time).
+ * Storage: Supabase REST with the service-role key (server-side only).
+ * Idempotent: unique (store_id, pending_rx_id) + ignore-duplicates, so agent retries
+ * and several PCs polling the same Kroll DB can never create duplicate rows.
  */
 
-function json(res, status, body) {
+import { timingSafeEqual } from "node:crypto";
+
+const MAX_BODY_BYTES = 64 * 1024;
+
+function send(res, status, body) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json");
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-api-key");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.end(JSON.stringify(body));
+  res.setHeader("Cache-Control", "no-store");
+  // No CORS headers on purpose: the caller is a desktop agent, not a browser.
+  res.end(status === 204 ? undefined : JSON.stringify(body));
+}
+
+function keyMatches(provided, expected) {
+  if (typeof provided !== "string") return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function str(value) {
+  return value != null ? String(value) : null;
+}
+
+function supabaseConfig() {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+  return url && key ? { url: url.replace(/\/$/, ""), key } : null;
+}
+
+function sbHeaders(key, extra = {}) {
+  return {
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+    "Content-Type": "application/json",
+    ...extra,
+  };
+}
+
+function isIsoDate(value) {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+}
+
+async function handleHeartbeat(body, cfg, res) {
+  const agent = body.agent || {};
+  if (!cfg) return send(res, 202, { ok: true, stored: false });
+  const resp = await fetch(`${cfg.url}/rest/v1/agent_events`, {
+    method: "POST",
+    headers: sbHeaders(cfg.key, { Prefer: "return=minimal" }),
+    body: JSON.stringify({
+      hostname: str(agent.hostname),
+      agent_version: str(agent.version),
+      event_type: "heartbeat",
+      message: str(body.mode),
+    }),
+  });
+  if (!resp.ok) return send(res, 500, { error: "Failed to store heartbeat" });
+  return send(res, 201, { ok: true, stored: true });
 }
 
 export default async function handler(req, res) {
-  if (req.method === "OPTIONS") {
-    return json(res, 204, {});
+  const expectedKey = process.env.AGENT_API_KEY;
+  if (!expectedKey || expectedKey.length < 24) {
+    return send(res, 500, { error: "AGENT_API_KEY is not configured (min 24 chars)" });
+  }
+  if (!keyMatches(req.headers["x-api-key"], expectedKey)) {
+    return send(res, 401, { error: "Unauthorized" });
+  }
+
+  const cfg = supabaseConfig();
+
+  // ---------------------------------------------------------------- GET
+  if (req.method === "GET") {
+    if (!cfg) return send(res, 503, { error: "Supabase not configured" });
+    const url = new URL(req.url, "http://x");
+    const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "50", 10) || 50, 1), 200);
+    const status = url.searchParams.get("status");
+    const allowed = ["received", "processing", "done", "error"];
+    const filter = status && allowed.includes(status) ? `&status=eq.${status}` : "";
+    const resp = await fetch(
+      `${cfg.url}/rest/v1/agent_sync_queue?select=id,store_id,pending_rx_id,drug_id,qty,status,agent_hostname,agent_mode,received_at` +
+        `&order=received_at.desc&limit=${limit}${filter}`,
+      { headers: sbHeaders(cfg.key) },
+    );
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) return send(res, 500, { error: "Query failed" });
+    return send(res, 200, { ok: true, count: data.length, rows: data });
   }
 
   if (req.method !== "POST") {
-    return json(res, 405, { error: "Method not allowed" });
+    return send(res, 405, { error: "Method not allowed" });
   }
 
-  const expectedKey = process.env.AGENT_API_KEY;
-  if (!expectedKey) {
-    return json(res, 500, { error: "AGENT_API_KEY not configured on server" });
-  }
-
-  const provided = req.headers["x-api-key"];
-  if (!provided || provided !== expectedKey) {
-    return json(res, 401, { error: "Unauthorized" });
-  }
-
+  // ---------------------------------------------------------------- POST
   let body = req.body;
   if (typeof body === "string") {
+    if (Buffer.byteLength(body) > MAX_BODY_BYTES) return send(res, 413, { error: "Payload too large" });
     try {
       body = JSON.parse(body);
     } catch {
-      return json(res, 400, { error: "Invalid JSON" });
+      return send(res, 400, { error: "Invalid JSON" });
     }
   }
-
-  if (!body || typeof body !== "object") {
-    return json(res, 400, { error: "Missing body" });
-  }
-
-  const pending = body.pending_rx || {};
-  const patient = body.patient || {};
-  const doctor = body.doctor || {};
-  const agent = body.agent || {};
-
-  const row = {
-    pending_rx_id: pending.pending_rx_id ?? null,
-    pat_id: pending.pat_id ?? null,
-    doc_id: pending.doc_id ?? null,
-    drug_id: pending.drug_id != null ? String(pending.drug_id) : null,
-    qty: pending.qty != null ? String(pending.qty) : null,
-    refills: pending.refills != null ? String(pending.refills) : null,
-    sig_text: pending.sig_text ?? null,
-    date_created: pending.date_created ?? null,
-    patient_first: patient.first_name ?? null,
-    patient_last: patient.last_name ?? null,
-    patient_dob: patient.dob ?? null,
-    patient_address: patient.address ?? null,
-    primary_plan_id:
-      patient.primary_plan_id != null ? String(patient.primary_plan_id) : null,
-    doctor_first: doctor.first_name ?? null,
-    doctor_last: doctor.last_name ?? null,
-    doctor_licence: doctor.licence ?? null,
-    agent_version: agent.version ?? null,
-    agent_hostname: agent.hostname ?? null,
-    agent_mode: body.mode ?? null,
-    raw_payload: body,
-    status: "received",
-  };
-
-  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const supabaseKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
-
-  if (!supabaseUrl || !supabaseKey) {
-    console.log("[sync-queue] no Supabase config — accepted only", {
-      pending_rx_id: row.pending_rx_id,
-      hostname: row.agent_hostname,
-    });
-    return json(res, 202, {
-      ok: true,
-      stored: false,
-      message: "Accepted (Supabase not configured)",
-      pending_rx_id: row.pending_rx_id,
-    });
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return send(res, 400, { error: "Missing body" });
   }
 
   try {
-    const endpoint = `${supabaseUrl.replace(/\/$/, "")}/rest/v1/agent_sync_queue`;
-    const resp = await fetch(endpoint, {
+    if (body.type === "heartbeat") return await handleHeartbeat(body, cfg, res);
+
+    const pending = body.pending_rx || {};
+    const patient = body.patient || {};
+    const doctor = body.doctor || {};
+    const agent = body.agent || {};
+
+    const pendingRxId = Number(pending.pending_rx_id);
+    if (!Number.isSafeInteger(pendingRxId) || pendingRxId < 0) {
+      return send(res, 400, { error: "pending_rx.pending_rx_id is required and must be an integer" });
+    }
+    if (!agent.hostname) {
+      return send(res, 400, { error: "agent.hostname is required" });
+    }
+
+    const storeId = String(body.store_id || "default").slice(0, 64);
+
+    const row = {
+      store_id: storeId,
+      pending_rx_id: pendingRxId,
+      pat_id: pending.pat_id ?? null,
+      doc_id: pending.doc_id ?? null,
+      drug_id: str(pending.drug_id),
+      qty: str(pending.qty),
+      refills: str(pending.refills),
+      sig_text: pending.sig_text ?? null,
+      date_created: isIsoDate(pending.date_created) ? pending.date_created : null,
+      patient_first: patient.first_name ?? null,
+      patient_last: patient.last_name ?? null,
+      patient_dob: isIsoDate(patient.dob) ? String(patient.dob).slice(0, 10) : null,
+      patient_address: patient.address ?? null,
+      primary_plan_id: str(patient.primary_plan_id),
+      doctor_first: doctor.first_name ?? null,
+      doctor_last: doctor.last_name ?? null,
+      doctor_licence: doctor.licence ?? null,
+      agent_version: str(agent.version),
+      agent_hostname: str(agent.hostname),
+      agent_mode: str(body.mode),
+      raw_payload: body,
+      status: "received",
+    };
+
+    if (!cfg) {
+      console.log("[sync-queue] no Supabase config — accepted only", { pending_rx_id: row.pending_rx_id });
+      return send(res, 202, { ok: true, stored: false, message: "Accepted (Supabase not configured)" });
+    }
+
+    const resp = await fetch(`${cfg.url}/rest/v1/agent_sync_queue?on_conflict=store_id,pending_rx_id`, {
       method: "POST",
-      headers: {
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`,
-        "Content-Type": "application/json",
-        Prefer: "return=representation",
-      },
+      headers: sbHeaders(cfg.key, { Prefer: "resolution=ignore-duplicates,return=representation" }),
       body: JSON.stringify(row),
     });
-
     const text = await resp.text();
-    let data;
+    let data = null;
     try {
       data = text ? JSON.parse(text) : null;
     } catch {
@@ -115,21 +181,21 @@ export default async function handler(req, res) {
     }
 
     if (!resp.ok) {
-      console.error("[sync-queue] supabase error", resp.status, data);
-      return json(res, 500, {
-        error: typeof data === "object" && data?.message ? data.message : String(data),
-      });
+      // Log status + Supabase error code only — never the payload (PHI).
+      console.error("[sync-queue] supabase error", resp.status, data?.code || "");
+      return send(res, 500, { error: "Failed to store payload" });
     }
 
-    const id = Array.isArray(data) ? data[0]?.id : data?.id;
-    return json(res, 201, {
+    const stored = Array.isArray(data) && data.length > 0;
+    return send(res, stored ? 201 : 200, {
       ok: true,
-      stored: true,
-      id: id ?? null,
-      pending_rx_id: row.pending_rx_id,
+      stored,
+      duplicate: !stored,
+      id: stored ? data[0].id : null,
+      pending_rx_id: pendingRxId,
     });
   } catch (err) {
-    console.error("[sync-queue] unexpected", err);
-    return json(res, 500, { error: String(err?.message || err) });
+    console.error("[sync-queue] unexpected", err?.message || err);
+    return send(res, 500, { error: "Internal error" });
   }
 }

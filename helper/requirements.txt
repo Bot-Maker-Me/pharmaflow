@@ -1,15 +1,15 @@
+# keystroke helper (kroll_tray_helper.py)
 Flask>=3.0.0
-flask-cors>=4.0.0
+waitress>=3.0.0
 pyautogui>=0.9.54
 pyperclip>=1.8.2
-
-# Optional: system-tray shell (the helper runs headless if these are absent)
+# optional system-tray shell (helper runs headless without these)
 pystray>=0.19.5
 Pillow>=10.0.0
 
-# flow.py — Kroll poller + cloud sync
+# Kroll SQL poller (flow.py)
 pyodbc>=5.1.0
 requests>=2.32.0
 
-# Optional: packaging into a single .exe
+# optional: packaging into a single .exe
 # pyinstaller>=6.6.0
