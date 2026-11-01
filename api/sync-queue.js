@@ -5,7 +5,7 @@
  * Persists into Supabase agent_sync_queue when SUPABASE_* env vars are set.
  */
 
-const { createClient } = require("@supabase/supabase-js");
+import { createClient } from "@supabase/supabase-js";
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -16,7 +16,7 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method === "OPTIONS") {
     return json(res, 204, {});
   }
@@ -66,7 +66,8 @@ module.exports = async function handler(req, res) {
     patient_last: patient.last_name ?? null,
     patient_dob: patient.dob ?? null,
     patient_address: patient.address ?? null,
-    primary_plan_id: patient.primary_plan_id != null ? String(patient.primary_plan_id) : null,
+    primary_plan_id:
+      patient.primary_plan_id != null ? String(patient.primary_plan_id) : null,
     doctor_first: doctor.first_name ?? null,
     doctor_last: doctor.last_name ?? null,
     doctor_licence: doctor.licence ?? null,
@@ -82,7 +83,6 @@ module.exports = async function handler(req, res) {
     process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 
   if (!supabaseUrl || !supabaseKey) {
-    // Accept payload even without Supabase so agents do not spool forever during setup
     console.log("[sync-queue] no Supabase config — accepted in memory only", {
       pending_rx_id: row.pending_rx_id,
       hostname: row.agent_hostname,
@@ -121,4 +121,4 @@ module.exports = async function handler(req, res) {
     console.error("[sync-queue] unexpected", err);
     return json(res, 500, { error: String(err?.message || err) });
   }
-};
+}
