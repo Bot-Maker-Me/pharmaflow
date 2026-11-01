@@ -1,109 +1,93 @@
-# PharmFlow local desktop helper
+# PharmFlow local desktop helpers
 
-`kroll_tray_helper.py` is the on-premise bridge between the PharmFlow web app and
-the legacy Pharmacy Management System running on the pharmacy workstation. It
-exposes a tiny local HTTP API and replays the verified prescription as
-keystrokes into the focused PMS window.
+Two processes run on the pharmacy Windows workstation:
 
-It binds to `127.0.0.1` on port `48120` — it is never exposed to the LAN, and it
-never talks to the internet.
+| Script | Role |
+|--------|------|
+| `kroll_tray_helper.py` | Keystroke bridge — receives verified scripts from the web app and types into Kroll / Propel / WinRx |
+| `flow.py` | Read-only SQL agent — polls `PendingNewRx`, enriches with patient/doctor, syncs to cloud |
 
-## Install & run from source
+---
+
+## flow.py — Kroll poller + cloud sync
+
+### Install
 
 ```powershell
+cd helper
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+Also install **ODBC Driver 17 for SQL Server** on the machine if it is not already present.
+
+### Config
+
+```powershell
+copy config.ini.example config.ini
+notepad config.ini
+```
+
+Set:
+
+- `Database.UID` / `PWD` — dedicated **read-only** SQL login (recommended: `rx`)
+- `Cloud.API_URL` — e.g. `https://pharmaflow-swart.vercel.app/api/sync-queue`
+- `Cloud.API_KEY` — same value as Vercel env `AGENT_API_KEY`
+- `Agent.MODE` — `SHADOW` (log only) or `LIVE` (push to cloud)
+
+### Create the read-only SQL user (run once as sysadmin on Kroll)
+
+```sql
+CREATE LOGIN rx WITH PASSWORD = 'StrongPasswordHere!', CHECK_POLICY = ON;
+USE Pharmacy;
+CREATE USER rx FOR LOGIN rx;
+GRANT SELECT ON SCHEMA::dbo TO rx;
+```
+
+### Run
+
+```powershell
+python flow.py
+```
+
+Logs: `helper/logs/pharmflow.log` (daily rotation).  
+Offline spool / dedupe: `helper/shadow_queue.db`.
+
+### Cloud endpoint
+
+`POST /api/sync-queue` with header `x-api-key: <AGENT_API_KEY>`.
+
+Payload is stored in Supabase table `agent_sync_queue` when `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` are set on Vercel.
+
+---
+
+## kroll_tray_helper.py — keystroke bridge
+
+Binds to `127.0.0.1:48120`. Never talks to the internet.
+
+```powershell
 python kroll_tray_helper.py --verbose
 ```
 
-The helper runs with a system-tray icon (blue cross) when `pystray` + `Pillow`
-are installed. Use `--no-tray` for a headless console session.
+| Method | Path | Purpose |
+|--------|------|--------|
+| `GET` | `/health` | Liveness probe |
+| `POST` | `/autofill` | Replay one prescription line into the PMS |
 
-The workstation must be an interactive desktop session: keystrokes are injected
-into whatever window has focus.
+See source for key mappings (Kroll F3/F5/F7, Propel, WinRx).
 
-## Build a single executable
+### Build .exe (optional)
 
 ```powershell
 pip install pyinstaller
 pyinstaller --noconfirm --onefile --noconsole --name kroll_tray_helper kroll_tray_helper.py
 ```
 
-The resulting `dist\kroll_tray_helper.exe` can be dropped into
-`%LOCALAPPDATA%\PharmFlow\` and started from a shortcut or a Run-key entry so it
-is always listening when pharmacy staff log in.
-
-> Build the `.exe` on the oldest Windows version you need to support so the
-> bundle resolves against a compatible `pyautogui`/`Pillow` toolchain.
-
-## Endpoints
-
-| Method | Path        | Purpose                                     |
-| ------ | ----------- | ------------------------------------------- |
-| `GET`  | `/health`   | Liveness probe used by the web app header   |
-| `GET`  | `/`         | Alias of `/health`                          |
-| `POST` | `/autofill` | Replay one prescription line into the PMS   |
-
-### `GET /health`
-
-```json
-{
-  "status": "ok",
-  "version": "1.2.0",
-  "target_systems": ["KROLL", "PROPELRX", "WINRX"],
-  "keystrokes_available": true
-}
-```
-
-### `POST /autofill`
-
-```json
-{
-  "target_system": "KROLL",
-  "data": {
-    "patient_lookup": "1234-567-890-ON",
-    "prescriber_license": "CPSO-78901",
-    "din_code": "00628115",
-    "quantity": "30",
-    "sig_text": "1 CAP PO TID X 10D"
-  }
-}
-```
-
-Responses:
-
-- `200 {"status": "success", "message": "Autofill triggered into Kroll", "target_system": "KROLL"}`
-- `400` missing/unknown target system or missing `data`
-- `409` the pyautogui failsafe fired (the user grabbed the mouse)
-- `500` unexpected driver failure
-- `503` `pyautogui` / `pyperclip` are not installed or not on a desktop session
-
-Notes:
-
-- `din_code` may be an empty string for extemporaneous compounds — the helper
-  then skips the product-search keystroke.
-- `quantity` is sent as a string so it can be typed literally.
-- One request is issued per medication, so a page with three prescriptions
-  produces three calls.
-
-## Key mappings
-
-| Target system      | Patient        | Prescriber | Drug search | Sig / qty        |
-| ------------------ | -------------- | ---------- | ----------- | ---------------- |
-| TELUS Kroll        | `F3`           | `F7`       | `F5`        | paste, `Tab`     |
-| McKesson Propel Rx | `Ctrl+F`       | `F2`       | `F6`        | paste, `Tab`     |
-| WinRx / Nexsys     | `Alt+C`        | `Alt+D`    | `Alt+P`     | paste, `Tab`     |
-
-Key sequences vary between PMS builds and site customisations. Adjust the
-`_autofill_*` drivers at the top of `kroll_tray_helper.py`; the web app does not
-need to change.
+---
 
 ## Safety
 
-- `pyautogui.FAILSAFE` is enabled: slam the pointer into a screen corner to
-  abort an in-flight autofill.
-- `pyautogui.PAUSE = 0.25` keeps the injected keystrokes slower than the PMS
-  event loop so fields are never skipped.
-- The helper writes no patient data to disk and logs only field names, never
-  field values.
+- `flow.py` is **read-only** against Kroll SQL.
+- `kroll_tray_helper.py` only injects keystrokes; it never writes clinical decisions.
+- Passwords live only in local `config.ini` (gitignored) and Vercel env vars.
