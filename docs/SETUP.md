@@ -23,11 +23,33 @@ and addresses are PHI (PIPEDA / provincial health-privacy law). Use the Supabase
 2. **Vercel**: import the GitHub repo. Add these environment variables (see `.env.example`):
    `AGENT_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `EXTRACT_ACCESS_TOKEN`.
    Generate secrets with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
-3. Deploy. Then check the API is protected and alive (replace the URL and key):
+3. **Get the extraction (AI) key** — see "Extraction key" below. Without it, Live extraction cannot work.
+4. Deploy. Then check the API is protected and alive (replace the URL and key):
    ```
    curl -i https://YOUR-APP.vercel.app/api/sync-queue                      # expect 401
    curl -s -H "x-api-key: YOUR_AGENT_API_KEY" https://YOUR-APP.vercel.app/api/sync-queue   # expect {"ok":true,"count":0,...}
    ```
+
+### Extraction key (Anthropic API key) — step by step
+
+The web app reads faxed prescriptions with a vision model. The call happens on Vercel (`/api/extract`), so the key
+never reaches a browser.
+
+1. Go to the **Claude Console** (console.anthropic.com), sign in or create an account.
+2. **Billing**: add a payment method / prepaid credits (API usage is billed separately from a Claude chat plan).
+3. **API keys → Create key**, name it `pharmaflow-prod`. Copy it immediately; it is shown only once.
+4. **Vercel → pharmaflow → Settings → Environment Variables**: add `ANTHROPIC_API_KEY` = that key
+   (Production, mark *Sensitive*).
+5. Create the app's own access token (any 32+ random chars) and add it as `EXTRACT_ACCESS_TOKEN`:
+   ```
+   node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
+   ```
+6. **Redeploy** (Vercel → Deployments → ⋯ → Redeploy) so the variables are picked up.
+7. In the web app → **Settings**: *Extraction mode = Live*, *API access token* = the `EXTRACT_ACCESS_TOKEN` value.
+8. Optional: set a monthly **spend limit** in the Console, and `EXTRACT_MODEL` in Vercel to pick another model.
+
+Privacy: fax images contain PHI and are sent to Anthropic's API for processing. Get the pharmacy's privacy
+officer to approve this and review Anthropic's current data-retention terms first.
 
 ## Part 2 — Client server PC (Kroll SQL Server) — `flow.py`
 
@@ -51,12 +73,14 @@ Requirements: Windows, Python 3.10+ (tick *Add to PATH*), **ODBC Driver 17 for S
    notepad config.ini
    ```
    Set `[Database]` SERVER / DATABASE / UID / PWD. Keep `MODE = SHADOW` for now.
-3. **Verify the Kroll table/column names** (they are educated guesses until checked):
+3. **Verify the Kroll table/column names.** Table names come from your own table list; column names are
+   still guesses until checked. Run:
    ```powershell
-   python flow.py --discover
+   python flow.py --schema-report
    ```
-   Compare the printed tables with the `[Schema]` defaults in `config.ini.example`. For every name that
-   differs, uncomment that line in `[Schema]` and fix it. Then:
+   It writes `schema_report.txt` (column names, types and primary keys for the 19 Kroll tables PharmFlow uses —
+   **no patient data**) and prints a proposed `[Schema]` block. Lines marked `# CHECK` or `?` need a human look.
+   Paste the proposed block into `config.ini` (fix any wrong lines), then:
    ```powershell
    python flow.py --test        # expect: TEST OK: connected, query ran, N pending row(s) visible
    ```
