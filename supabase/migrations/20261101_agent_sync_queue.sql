@@ -4,6 +4,7 @@
 -- Incoming payloads from local flow.py agents
 CREATE TABLE IF NOT EXISTS public.agent_sync_queue (
   id                BIGSERIAL PRIMARY KEY,
+  store_id          TEXT NOT NULL DEFAULT 'default',
   pending_rx_id     BIGINT,
   pat_id            BIGINT,
   doc_id            BIGINT,
@@ -64,6 +65,6 @@ ALTER TABLE public.agent_events ENABLE ROW LEVEL SECURITY;
 -- of this Supabase project read every pharmacy's data. Add a store_id-scoped
 -- policy when multi-tenant auth exists.
 
--- One row per (Kroll pending Rx, agent machine): makes agent retries idempotent.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_sync_queue_rx_host
-  ON public.agent_sync_queue (pending_rx_id, agent_hostname);
+-- One row per (pharmacy, Kroll pending Rx): retries and multiple PCs cannot duplicate.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_sync_queue_store_rx
+  ON public.agent_sync_queue (store_id, pending_rx_id);

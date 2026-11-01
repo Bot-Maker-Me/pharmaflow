@@ -154,6 +154,9 @@ class AgentConfig:
         self.mode: str = cp.get("Agent", "MODE", fallback="SHADOW").strip().upper()
         self.poll_interval: int = cp.getint("Agent", "POLL_INTERVAL_SEC", fallback=DEFAULT_POLL_INTERVAL)
         self.agent_version: str = cp.get("Agent", "AGENT_VERSION", fallback="1.1.0")
+        # Same value on every PC of one pharmacy: all PCs that read the same Kroll DB
+        # then de-duplicate to a single row per prescription in the cloud.
+        self.store_id: str = cp.get("Agent", "STORE_ID", fallback="default").strip() or "default"
 
         self.db_server: str = cp.get("Database", "SERVER", fallback="localhost").strip()
         self.db_name: str = cp.get("Database", "DATABASE", fallback="Pharmacy").strip()
@@ -164,6 +167,8 @@ class AgentConfig:
 
         self.api_url: str = cp.get("Cloud", "API_URL", fallback="").strip().rstrip("/")
         self.api_key: str = cp.get("Cloud", "API_KEY", fallback="").strip()
+        # Only needed if Vercel Deployment Protection is on for the API URL
+        self.bypass_token: str = cp.get("Cloud", "VERCEL_BYPASS_TOKEN", fallback="").strip()
 
         self.schema: Dict[str, str] = dict(DEFAULT_SCHEMA)
         if cp.has_section("Schema"):
@@ -541,6 +546,8 @@ class CloudClient:
                 "User-Agent": f"PharmFlow-Agent/{cfg.agent_version}",
             }
         )
+        if cfg.bypass_token:
+            self.session.headers["x-vercel-protection-bypass"] = cfg.bypass_token
 
     def push(self, payload: Dict[str, Any]) -> Tuple[bool, str, bool]:
         """Returns (ok, error, permanent). permanent=True for 4xx (retry is pointless)."""
@@ -556,8 +563,9 @@ class CloudClient:
 
 def build_payload(row: Dict[str, Any], cfg: AgentConfig) -> Dict[str, Any]:
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "mode": cfg.mode,
+        "store_id": cfg.store_id,
         "agent": {
             "version": cfg.agent_version,
             "hostname": socket.gethostname(),
@@ -673,6 +681,7 @@ class PharmFlowAgent:
             {
                 "type": "heartbeat",
                 "mode": self.cfg.mode,
+                "store_id": self.cfg.store_id,
                 "agent": {
                     "version": self.cfg.agent_version,
                     "hostname": socket.gethostname(),

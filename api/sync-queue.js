@@ -9,8 +9,8 @@
  *
  * Auth: x-api-key must match AGENT_API_KEY (compared in constant time).
  * Storage: Supabase REST with the service-role key (server-side only).
- * Idempotent: unique (pending_rx_id, agent_hostname) + ignore-duplicates, so
- * agent retries can never create duplicate rows.
+ * Idempotent: unique (store_id, pending_rx_id) + ignore-duplicates, so agent retries
+ * and several PCs polling the same Kroll DB can never create duplicate rows.
  */
 
 import { timingSafeEqual } from "node:crypto";
@@ -92,7 +92,7 @@ export default async function handler(req, res) {
     const allowed = ["received", "processing", "done", "error"];
     const filter = status && allowed.includes(status) ? `&status=eq.${status}` : "";
     const resp = await fetch(
-      `${cfg.url}/rest/v1/agent_sync_queue?select=id,pending_rx_id,drug_id,qty,status,agent_hostname,agent_mode,received_at` +
+      `${cfg.url}/rest/v1/agent_sync_queue?select=id,store_id,pending_rx_id,drug_id,qty,status,agent_hostname,agent_mode,received_at` +
         `&order=received_at.desc&limit=${limit}${filter}`,
       { headers: sbHeaders(cfg.key) },
     );
@@ -135,7 +135,10 @@ export default async function handler(req, res) {
       return send(res, 400, { error: "agent.hostname is required" });
     }
 
+    const storeId = String(body.store_id || "default").slice(0, 64);
+
     const row = {
+      store_id: storeId,
       pending_rx_id: pendingRxId,
       pat_id: pending.pat_id ?? null,
       doc_id: pending.doc_id ?? null,
@@ -164,7 +167,7 @@ export default async function handler(req, res) {
       return send(res, 202, { ok: true, stored: false, message: "Accepted (Supabase not configured)" });
     }
 
-    const resp = await fetch(`${cfg.url}/rest/v1/agent_sync_queue?on_conflict=pending_rx_id,agent_hostname`, {
+    const resp = await fetch(`${cfg.url}/rest/v1/agent_sync_queue?on_conflict=store_id,pending_rx_id`, {
       method: "POST",
       headers: sbHeaders(cfg.key, { Prefer: "resolution=ignore-duplicates,return=representation" }),
       body: JSON.stringify(row),
