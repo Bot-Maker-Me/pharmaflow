@@ -58,29 +58,12 @@ CREATE INDEX IF NOT EXISTS idx_agent_events_created
 ALTER TABLE public.agent_sync_queue ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.agent_events ENABLE ROW LEVEL SECURITY;
 
--- Allow authenticated dashboard users to read their store data later
--- (tighten with store_id when multi-tenant is added)
-CREATE POLICY "service_role_all_sync_queue"
-  ON public.agent_sync_queue
-  FOR ALL
-  USING (auth.role() = 'service_role')
-  WITH CHECK (auth.role() = 'service_role');
+-- NOTE: there is deliberately NO policy for the `authenticated` role.
+-- Rows contain patient names / DOB / addresses (PHI). An open
+-- "FOR SELECT TO authenticated USING (true)" policy would let ANY signed-up user
+-- of this Supabase project read every pharmacy's data. Add a store_id-scoped
+-- policy when multi-tenant auth exists.
 
-CREATE POLICY "service_role_all_agent_events"
-  ON public.agent_events
-  FOR ALL
-  USING (auth.role() = 'service_role')
-  WITH CHECK (auth.role() = 'service_role');
-
--- Optional: read access for authenticated users (dashboard)
-CREATE POLICY "authenticated_read_sync_queue"
-  ON public.agent_sync_queue
-  FOR SELECT
-  TO authenticated
-  USING (true);
-
-CREATE POLICY "authenticated_read_agent_events"
-  ON public.agent_events
-  FOR SELECT
-  TO authenticated
-  USING (true);
+-- One row per (Kroll pending Rx, agent machine): makes agent retries idempotent.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_sync_queue_rx_host
+  ON public.agent_sync_queue (pending_rx_id, agent_hostname);

@@ -113,6 +113,7 @@ export class LocalHelperClient {
     pmsId: PmsId,
     helperUrl: string,
     onStep: (step: KeystrokeStep, index: number, total: number) => void,
+    helperToken = "",
   ): Promise<PushOutcome> {
     const profile = getPmsProfile(pmsId);
     const steps = buildKeystrokePlan(script, profile);
@@ -121,7 +122,7 @@ export class LocalHelperClient {
     const reachable = this.status === "connected";
 
     const postPromise: Promise<string | null> = reachable
-      ? this.postAll(base, requests)
+      ? this.postAll(base, requests, helperToken)
       : Promise.resolve(null);
 
     await delay(160);
@@ -156,14 +157,21 @@ export class LocalHelperClient {
   }
 
   /** POST one `/autofill` call per medication. Returns an error message or null. */
-  private async postAll(base: string, requests: HelperPayload[]): Promise<string | null> {
+  private async postAll(
+    base: string,
+    requests: HelperPayload[],
+    helperToken: string,
+  ): Promise<string | null> {
     for (const payload of requests) {
       try {
         const response = await fetchWithTimeout(
           `${base}/autofill`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              ...(helperToken ? { "x-helper-token": helperToken } : {}),
+            },
             body: JSON.stringify(payload),
           },
           POST_TIMEOUT_MS,
@@ -171,7 +179,8 @@ export class LocalHelperClient {
 
         const body = (await response.json().catch(() => null)) as { message?: string } | null;
         if (!response.ok) {
-          this.setStatus("offline");
+          // 4xx = helper reachable but refused (wrong window, bad data, bad token).
+          if (response.status >= 500) this.setStatus("offline");
           return body?.message ?? `Helper returned HTTP ${response.status}`;
         }
       } catch (error) {

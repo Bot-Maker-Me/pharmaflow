@@ -91,7 +91,10 @@ function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
+    const merged = { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
+    // Older builds defaulted to a localhost:8000 API that never existed.
+    if (merged.apiBaseUrl === "http://localhost:8000") merged.apiBaseUrl = "";
+    return merged;
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -391,6 +394,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         settingsRef.current.pms,
         settingsRef.current.helperUrl,
         onStep,
+        settingsRef.current.helperToken,
       );
 
       if (result.ok) {

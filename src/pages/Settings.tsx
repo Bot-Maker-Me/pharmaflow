@@ -72,6 +72,21 @@ export default function Settings() {
               </p>
             </div>
             <div>
+              <Label htmlFor="helper-token">Helper token (optional)</Label>
+              <Input
+                id="helper-token"
+                type="password"
+                autoComplete="off"
+                className="mt-1.5 font-mono text-xs"
+                value={settings.helperToken}
+                onChange={(event) => updateSettings({ helperToken: event.target.value })}
+              />
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                Must match <span className="font-mono">TOKEN</span> in the helper's{" "}
+                <span className="font-mono">config.ini [Helper]</span> section.
+              </p>
+            </div>
+            <div>
               <Label>Connection probe</Label>
               <div className="mt-1.5 flex items-center gap-2">
                 <Button variant="outline" onClick={checkHelper}>
@@ -255,8 +270,23 @@ export default function Settings() {
                 onChange={(event) => updateSettings({ apiBaseUrl: event.target.value })}
               />
               <p className="mt-1.5 text-[11px] text-muted-foreground">
-                Expects <span className="font-mono">POST /api/extract</span> and{" "}
-                <span className="font-mono">GET /api/dpd/&#123;din&#125;</span>.
+                Leave blank to use this site's own API. Expects <span className="font-mono">POST /api/extract</span> and{" "}
+                <span className="font-mono">GET /api/dpd/&#123;din&#125; (optional)</span>.
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="api-token">API access token</Label>
+              <Input
+                id="api-token"
+                type="password"
+                autoComplete="off"
+                className="mt-1.5 font-mono text-xs"
+                value={settings.apiToken}
+                onChange={(event) => updateSettings({ apiToken: event.target.value })}
+              />
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                Must equal the <span className="font-mono">EXTRACT_ACCESS_TOKEN</span> Vercel variable. Needed
+                for Live extraction.
               </p>
             </div>
           </div>
