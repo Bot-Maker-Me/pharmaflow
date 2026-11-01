@@ -1,11 +1,9 @@
 /**
  * POST /api/sync-queue
- * Receives structured payloads from local flow.py agents.
- * Auth: x-api-key header must match AGENT_API_KEY env var.
- * Persists into Supabase agent_sync_queue when SUPABASE_* env vars are set.
+ * Receives payloads from local flow.py agents.
+ * Auth: x-api-key must match AGENT_API_KEY.
+ * Writes to Supabase via REST (no @supabase/supabase-js package required).
  */
-
-import { createClient } from "@supabase/supabase-js";
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -83,7 +81,7 @@ export default async function handler(req, res) {
     process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 
   if (!supabaseUrl || !supabaseKey) {
-    console.log("[sync-queue] no Supabase config — accepted in memory only", {
+    console.log("[sync-queue] no Supabase config — accepted only", {
       pending_rx_id: row.pending_rx_id,
       hostname: row.agent_hostname,
     });
@@ -96,25 +94,38 @@ export default async function handler(req, res) {
   }
 
   try {
-    const supabase = createClient(supabaseUrl, supabaseKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
+    const endpoint = `${supabaseUrl.replace(/\/$/, "")}/rest/v1/agent_sync_queue`;
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify(row),
     });
 
-    const { data, error } = await supabase
-      .from("agent_sync_queue")
-      .insert(row)
-      .select("id")
-      .single();
-
-    if (error) {
-      console.error("[sync-queue] supabase insert error", error);
-      return json(res, 500, { error: error.message });
+    const text = await resp.text();
+    let data;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = text;
     }
 
+    if (!resp.ok) {
+      console.error("[sync-queue] supabase error", resp.status, data);
+      return json(res, 500, {
+        error: typeof data === "object" && data?.message ? data.message : String(data),
+      });
+    }
+
+    const id = Array.isArray(data) ? data[0]?.id : data?.id;
     return json(res, 201, {
       ok: true,
       stored: true,
-      id: data?.id,
+      id: id ?? null,
       pending_rx_id: row.pending_rx_id,
     });
   } catch (err) {
