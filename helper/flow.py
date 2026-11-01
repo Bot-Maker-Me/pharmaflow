@@ -7,6 +7,7 @@ patient / doctor data and syncs structured payloads to the cloud backend.
 Modes
 -----
   python flow.py              run the poll loop (SHADOW or LIVE per config.ini)
+  python flow.py --schema-report  write schema_report.txt (columns only, no PHI)
   python flow.py --discover   list tables/columns in the Kroll DB so you can
                               verify / fix the [Schema] mapping in config.ini
   python flow.py --test       one connection + one poll, print counts, exit
@@ -59,6 +60,15 @@ BATCH_SIZE = 50
 HEARTBEAT_EVERY_SEC = 300
 SPOOL_MAX_ATTEMPTS = 20          # then the item is parked as dead-letter
 SPOOL_MAX_ROWS = 5000            # safety cap for a long outage
+
+# Tables present in your Kroll database that PharmFlow cares about
+# (taken from your own table extract).
+KNOWN_TABLES: List[str] = [
+    "PendingNewRx", "ERx", "ERxOrder", "RxToDo",
+    "Pat", "PatAdd", "PatPhone", "PatPln", "PatAlg",
+    "Doc", "DocLicence", "DocPhone", "DocAdd",
+    "Rx", "RxWorkflow", "RxWorkflowDetail", "RxPln", "RxPlnAdj", "RxScriptImage",
+]
 
 # Identifiers (table / column names) are interpolated into SQL, so they are
 # validated against this pattern. Values are never interpolated.
@@ -521,6 +531,98 @@ class KrollDB:
         print("\nAll table names:\n  " + "\n  ".join(sorted(tables)))
         print("\nCopy the right names into the [Schema] section of config.ini.")
 
+
+    def schema_report(self, out_path: Path) -> None:
+        """Write column names + types (NO row data, so no PHI) for KNOWN_TABLES and
+        print a proposed [Schema] block. Safe to share with your developer."""
+        conn = self.ensure()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE "
+                "FROM INFORMATION_SCHEMA.COLUMNS ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION"
+            )
+            cols: Dict[str, List[Tuple[str, str, str]]] = {}
+            full: Dict[str, str] = {}
+            for schema, table, column, dtype, nullable in cur.fetchall():
+                key = table.lower()
+                full[key] = f"{schema}.{table}"
+                cols.setdefault(key, []).append((column, dtype, nullable))
+            cur.execute(
+                "SELECT k.TABLE_NAME, k.COLUMN_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS t "
+                "JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE k ON t.CONSTRAINT_NAME = k.CONSTRAINT_NAME "
+                "WHERE t.CONSTRAINT_TYPE = 'PRIMARY KEY'"
+            )
+            pks: Dict[str, List[str]] = {}
+            for table, column in cur.fetchall():
+                pks.setdefault(table.lower(), []).append(column)
+        finally:
+            cur.close()
+
+        lines: List[str] = [f"PharmFlow schema report | database={self.cfg.db_name} | host={socket.gethostname()}", ""]
+        for name in KNOWN_TABLES:
+            key = name.lower()
+            if key not in cols:
+                lines += [f"== {name}: NOT FOUND", ""]
+                continue
+            pk = ", ".join(pks.get(key, [])) or "(none)"
+            lines.append(f"== {full[key]}   PK: {pk}")
+            lines += [f"   {c:<28} {t}{'' if n == 'YES' else '  NOT NULL'}" for c, t, n in cols[key]]
+            lines.append("")
+
+        def names(table: str) -> List[str]:
+            return [c for c, _, _ in cols.get(table.lower(), [])]
+
+        def pick(table: str, *needles: str) -> str:
+            cands = names(table)
+            # exact matches first (in needle order), then substring matches; very short
+            # needles (e.g. "din", "id") only count as exact to avoid false hits like "Pending".
+            found = [c for n in needles for c in cands if c.lower() == n]
+            found += [c for c in cands if c not in found and any(len(n) > 3 and n in c.lower() for n in needles)]
+            if not found:
+                return "?"
+            return found[0] + ("   # CHECK, also: " + ", ".join(found[1:4]) if len(found) > 1 else "")
+
+        def tbl(name: str) -> str:
+            return full.get(name.lower(), f"dbo.{name}")
+
+        pend_pk = pks.get("pendingnewrx", [])
+        lines += [
+            "---- PROPOSED [Schema] (heuristic - verify every line marked CHECK or ?) ----",
+            "[Schema]",
+            f"pending_table = {tbl('PendingNewRx')}",
+            f"pending_id = {pend_pk[0] if len(pend_pk) == 1 else pick('PendingNewRx', 'pendingrxid', 'id')}",
+            f"pending_pat_id = {pick('PendingNewRx', 'patid', 'patientid')}",
+            f"pending_doc_id = {pick('PendingNewRx', 'docid', 'doctorid', 'prescriber')}",
+            f"pending_drug_id = {pick('PendingNewRx', 'drugid', 'drug', 'din')}",
+            f"pending_qty = {pick('PendingNewRx', 'qty', 'quantity')}",
+            f"pending_refills = {pick('PendingNewRx', 'refill')}",
+            f"pending_sig = {pick('PendingNewRx', 'sig')}",
+            f"pending_created = {pick('PendingNewRx', 'datecreated', 'created', 'date')}",
+            f"pending_status = {pick('PendingNewRx', 'status')}",
+            f"pat_table = {tbl('Pat')}",
+            f"pat_id = {pick('Pat', 'patid', 'id')}",
+            f"pat_first = {pick('Pat', 'first', 'fname')}",
+            f"pat_last = {pick('Pat', 'last', 'lname')}",
+            f"pat_dob = {pick('Pat', 'birth', 'dob')}",
+            f"addr_table = {tbl('PatAdd')}",
+            f"addr_pat_id = {pick('PatAdd', 'patid')}",
+            f"addr_line = {pick('PatAdd', 'address1', 'addr1', 'street', 'address')}",
+            f"plan_table = {tbl('PatPln')}",
+            f"plan_pat_id = {pick('PatPln', 'patid')}",
+            f"plan_id = {pick('PatPln', 'planid', 'plan')}",
+            f"doc_table = {tbl('Doc')}",
+            f"doc_id = {pick('Doc', 'docid', 'id')}",
+            f"doc_first = {pick('Doc', 'first', 'fname')}",
+            f"doc_last = {pick('Doc', 'last', 'lname')}",
+            f"lic_table = {tbl('DocLicence')}",
+            f"lic_doc_id = {pick('DocLicence', 'docid')}",
+            f"lic_num = {pick('DocLicence', 'licen', 'number', 'num')}",
+        ]
+        out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print("\n".join(lines))
+        print(f"\nSaved to {out_path}  (column names only - contains no patient data)")
+
     def close(self) -> None:
         if self._conn is not None:
             try:
@@ -733,6 +835,8 @@ class PharmFlowAgent:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="PharmFlow Kroll poller")
     parser.add_argument("--discover", action="store_true", help="list DB tables/columns and exit")
+    parser.add_argument("--schema-report", action="store_true",
+                        help="write schema_report.txt (columns of your Kroll tables, no data) and exit")
     parser.add_argument("--test", action="store_true", help="connect, poll once, print counts, exit")
     args = parser.parse_args(argv)
 
@@ -741,6 +845,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:
         print(f"FATAL config error: {exc}", file=sys.stderr)
         return 1
+
+    if args.schema_report:
+        logger = setup_logging(cfg.agent_version)
+        KrollDB(cfg, logger).schema_report(BASE_DIR / "schema_report.txt")
+        return 0
 
     if args.discover:
         logger = setup_logging(cfg.agent_version)
