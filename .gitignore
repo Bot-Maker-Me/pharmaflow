@@ -1,1 +1,26 @@
 .dyad/
+
+# dependencies
+node_modules/
+
+# build
+dist/
+build/
+
+# env & secrets
+.env
+.env.*
+!.env.example
+helper/config.ini
+
+# local agent state
+helper/shadow_queue.db
+helper/logs/
+helper/.venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
