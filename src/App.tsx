@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Inbox from "@/pages/Inbox";
 import Index from "@/pages/Index";
 import Landing from "@/pages/Landing";
+import Live from "@/pages/Live";
 import NotFound from "@/pages/NotFound";
 import Queue from "@/pages/Queue";
 import Settings from "@/pages/Settings";
@@ -25,6 +26,7 @@ export default function App() {
             <Route index element={<Index />} />
             <Route path="verify" element={<Verify />} />
             <Route path="verify/:scriptId" element={<Verify />} />
+            <Route path="live" element={<Live />} />
             <Route path="inbox" element={<Inbox />} />
             <Route path="queue" element={<Queue />} />
             <Route path="settings" element={<Settings />} />
