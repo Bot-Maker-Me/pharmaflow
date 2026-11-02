@@ -61,6 +61,8 @@ CLOUD_TIMEOUT_SEC = 15
 DB_CONNECT_TIMEOUT_SEC = 10
 BATCH_SIZE = 50
 HEARTBEAT_EVERY_SEC = 300
+COMPARE_EVERY_SEC = 600          # how often SHADOW looks for staff entries
+COMPARE_GIVE_UP_DAYS = 3         # an AUTO decision never entered by staff after this long is reported as such
 SPOOL_MAX_ATTEMPTS = 20          # then the item is parked as dead-letter
 SPOOL_MAX_ROWS = 5000            # safety cap for a long outage
 
@@ -204,6 +206,9 @@ class AgentConfig:
         self.go_live_min_samples: int = cp.getint("Shadow", "GO_LIVE_MIN_SAMPLES", fallback=200)
         self.go_live_min_auto: float = cp.getfloat("Shadow", "GO_LIVE_MIN_AUTO_RATE", fallback=0.80)
 
+        # SHADOW also records to Supabase (decisions + comparisons) when the cloud is configured.
+        self.cloud_enabled: bool = bool(self.api_url and self.api_key and "CHANGE_ME" not in self.api_key)
+
         if self.mode not in ("SHADOW", "LIVE"):
             raise ValueError(f"Invalid MODE: {self.mode}. Use SHADOW or LIVE.")
         if self.poll_interval < 1:
@@ -213,8 +218,8 @@ class AgentConfig:
         if self.mode == "LIVE":
             if not self.api_url or not self.api_key or "CHANGE_ME" in self.api_key:
                 raise ValueError("LIVE mode needs Cloud API_URL and a real API_KEY in config.ini")
-            if not self.api_url.lower().startswith("https://"):
-                raise ValueError("Cloud API_URL must be https:// (patient data is sent over it)")
+        if self.cloud_enabled and not self.api_url.lower().startswith("https://"):
+            raise ValueError("Cloud API_URL must be https:// (patient data is sent over it)")
 
         for key, value in self.rx_schema.items():
             if value and not IDENT_RE.match(value):
@@ -288,6 +293,10 @@ class LocalStore:
                     issues        TEXT NOT NULL,       -- JSON list
                     planned       TEXT NOT NULL        -- JSON: what would be entered
                 );
+                CREATE TABLE IF NOT EXISTS shadow_compared (
+                    pending_rx_id INTEGER PRIMARY KEY,
+                    compared_at   TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS meta (
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -351,6 +360,27 @@ class LocalStore:
                 (pending_rx_id, dt.datetime.now(dt.timezone.utc).isoformat(), action,
                  json.dumps(issues), json.dumps(planned, default=str)),
             )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def load_uncompared(self, limit: int = 100) -> List[sqlite3.Row]:
+        conn = self._connect()
+        try:
+            return list(conn.execute(
+                "SELECT d.* FROM shadow_decisions d "
+                "LEFT JOIN shadow_compared c ON c.pending_rx_id = d.pending_rx_id "
+                "WHERE d.action = 'AUTO' AND c.pending_rx_id IS NULL ORDER BY d.pending_rx_id LIMIT ?",
+                (limit,),
+            ).fetchall())
+        finally:
+            conn.close()
+
+    def mark_compared(self, pending_rx_id: int) -> None:
+        conn = self._connect()
+        try:
+            conn.execute("INSERT OR IGNORE INTO shadow_compared VALUES (?, ?)",
+                         (pending_rx_id, dt.datetime.now(dt.timezone.utc).isoformat()))
             conn.commit()
         finally:
             conn.close()
@@ -834,6 +864,7 @@ class PharmFlowAgent:
         self.db = KrollDB(cfg, self.log)
         self.cloud = CloudClient(cfg, self.log)
         self._last_heartbeat = 0.0
+        self._last_compare = -COMPARE_EVERY_SEC
         self._running = True
         self.log.info(
             "Config loaded | mode=%s | poll=%ss | db_user=%s | api=%s",
@@ -854,7 +885,7 @@ class PharmFlowAgent:
             pending_id, "EXCEPTION" if issues else "AUTO", issues, planned_entry(row)
         )
 
-        if self.cfg.mode == "SHADOW":
+        if self.cfg.mode == "SHADOW" and not self.cfg.cloud_enabled:
             # IDs only — no patient / doctor names in logs.
             self.log.info(
                 "[SHADOW] PendingRxId=%s | would=%s | issues=%s",
@@ -866,6 +897,11 @@ class PharmFlowAgent:
             return
 
         payload = build_payload(row, self.cfg)
+        payload["decision"] = {
+            "action": "EXCEPTION" if issues else "AUTO",
+            "issues": issues,
+            "planned": planned_entry(row),
+        }
         ok, err, permanent = self.cloud.push(payload)
         if ok:
             self.log.info("Synced PendingRxId=%s to cloud", pending_id)
@@ -876,7 +912,7 @@ class PharmFlowAgent:
         self.store.mark_processed(pending_id)
 
     def _flush_spool(self) -> None:
-        if self.cfg.mode != "LIVE":
+        if not self.cfg.cloud_enabled:
             return
         items = self.store.load_spool(limit=30)
         if not items:
@@ -903,8 +939,40 @@ class PharmFlowAgent:
             self.log.warning("Spool retry failed id=%s: %s", item["id"], err)
             break                 # network/server down — try again next cycle
 
+    def _compare_with_staff(self) -> None:
+        """SHADOW: look up what staff actually entered in Kroll and report the match to the cloud."""
+        r = self.cfg.rx_schema
+        if not self.cfg.cloud_enabled or not r["rx_table"]:
+            return
+        if time.monotonic() - self._last_compare < COMPARE_EVERY_SEC:
+            return
+        self._last_compare = time.monotonic()
+
+        now = dt.datetime.now(dt.timezone.utc)
+        for d in self.store.load_uncompared(limit=100):
+            planned = json.loads(d["planned"])
+            planned["pending_rx_id"] = d["pending_rx_id"]
+            actual = self.db.fetch_actual_rx(planned)
+            if actual is None:
+                return                                   # [RxSchema] incomplete
+            age = now - dt.datetime.fromisoformat(d["decided_at"])
+            if not actual and age < dt.timedelta(days=COMPARE_GIVE_UP_DAYS):
+                continue                                 # staff have not entered it yet
+            result = {
+                "type": "shadow_result",
+                "store_id": self.cfg.store_id,
+                "pending_rx_id": d["pending_rx_id"],
+                "actual": actual or None,
+                "field_match": field_matches(planned, actual, r) if actual else None,
+            }
+            ok, err, _ = self.cloud.push(result)
+            if not ok:
+                self.log.warning("Could not upload comparison for PendingRxId=%s: %s", d["pending_rx_id"], err)
+                return
+            self.store.mark_compared(d["pending_rx_id"])
+
     def _heartbeat(self) -> None:
-        if self.cfg.mode != "LIVE" or time.monotonic() - self._last_heartbeat < HEARTBEAT_EVERY_SEC:
+        if not self.cfg.cloud_enabled or time.monotonic() - self._last_heartbeat < HEARTBEAT_EVERY_SEC:
             return
         self._last_heartbeat = time.monotonic()
         ok, err, _ = self.cloud.push(
@@ -934,6 +1002,7 @@ class PharmFlowAgent:
                 top = max(int(r["PendingRxId"]) for r in rows if r.get("PendingRxId") is not None)
                 self.store.set_watermark(max(top, watermark))
             self._flush_spool()
+            self._compare_with_staff()
             self._heartbeat()
             return len(rows)
         except pyodbc.Error as exc:
@@ -958,6 +1027,15 @@ class PharmFlowAgent:
         finally:
             self.db.close()
             self.log.info("Agent stopped")
+
+
+FIELD_COLUMNS = [("pat_id", "rx_pat_id"), ("doc_id", "rx_doc_id"), ("drug_id", "rx_drug_id"),
+                 ("qty", "rx_qty"), ("refills", "rx_refills"), ("sig", "rx_sig")]
+
+
+def field_matches(planned: Dict[str, Any], actual: Dict[str, Any], rx_schema: Dict[str, str]) -> Dict[str, bool]:
+    return {p: _norm(p, planned.get(p)) == _norm(p, actual.get(a))
+            for p, a in FIELD_COLUMNS if rx_schema.get(a)}
 
 
 def _norm(field: str, value: Any) -> str:

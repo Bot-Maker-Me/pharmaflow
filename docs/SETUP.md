@@ -93,13 +93,26 @@ Requirements: Windows, Python 3.10+ (tick *Add to PATH*), **ODBC Driver 17 for S
    `MODE = LIVE`, `[Cloud] API_URL = https://YOUR-APP.vercel.app/api/sync-queue`, `API_KEY = <AGENT_API_KEY>`.
    Run `python flow.py`; you should see `Synced PendingRxId=...`. Confirm with the `curl` GET above, or the
    Supabase table editor.
-6. **Run it at boot** (Task Scheduler): *Create Task* → run whether user is logged on or not →
-   Trigger *At startup* → Action: program `C:\PharmFlow\helper\.venv\Scripts\python.exe`,
-   arguments `flow.py`, *Start in* `C:\PharmFlow\helper` → Settings: restart on failure every 1 minute.
+6. **Run it 24/7 (survives closing the terminal and reboots).** In an **Administrator** PowerShell:
+   ```powershell
+   cd C:\PharmFlow\helper
+   powershell -ExecutionPolicy Bypass -File .\install_service.ps1
+   ```
+   It tests the config, locks `config.ini` to SYSTEM/Administrators, registers a hidden Windows task *PharmFlow Agent*
+   that starts at boot and restarts itself within a minute if it crashes, and stops the PC sleeping.
+   Python must be installed **for all users** (e.g. `C:\Program Files\Python312`), not inside one user's profile,
+   because the task runs as SYSTEM. Remove it any time with `.\uninstall_service.ps1`.
+   Closing the terminal only stops a `python flow.py` you started by hand; the installed task keeps running.
+
+**Install `flow.py` on ONE PC only** (the Kroll server PC, or any always-on PC that can reach the SQL Server) — not on
+every workstation. Staff open the web app in a browser (nothing to install). The keystroke helper is only for
+workstations and only once automatic typing is enabled; it is not needed during the shadow week.
 
 ### Shadow week (compare before going automatic)
 
-In `MODE = SHADOW`, `flow.py` sends nothing anywhere. For every pending prescription it records a decision:
+In `MODE = SHADOW`, `flow.py` types nothing and changes nothing in Kroll. With `[Cloud]` filled in it records every
+pending prescription **and its decision into Supabase**, and every 10 minutes looks up what staff actually entered
+(`[RxSchema]`) and uploads the comparison. For every pending prescription it records a decision:
 **AUTO** (nothing needed a human judgement) or **EXCEPTION** (e.g. prescriber has no licence, no insurance plan,
 no sig, quantity 0) plus the exact values it *would* have entered.
 
@@ -116,6 +129,30 @@ no sig, quantity 0) plus the exact values it *would* have entered.
    `[Schema]`, **reset the week** (delete `shadow_queue.db`) and run another week. Repeat until the verdict is READY.
 4. Going live is then a supervised pilot (EXCEPTION items always go to a person), not a switch to unattended
    billing. Claim submission itself must stay inside Kroll's own workflow.
+
+### Nightly report (Supabase runs it, you get an e-mail)
+
+Supabase's scheduler (`pg_cron`) runs `run_daily_shadow_report()` every hour; it acts once per day, in the hour set in
+`shadow_report_settings` (default **20 = 8 PM, time zone America/Toronto**). It compares, per field, what the agent
+would have done with what staff entered, lists mismatches (Kroll ids only), exception reasons and agent health
+(heartbeats; it warns if the agent was silent for 30+ minutes), and stores it in table `shadow_reports`.
+
+To get it by e-mail (optional, uses [Resend](https://resend.com)):
+1. Create a Resend account + API key, and verify a sending domain/address.
+2. Vercel env vars: `REPORT_SECRET` (random 32+ chars), `RESEND_API_KEY`, `REPORT_EMAIL_TO` (your address),
+   `REPORT_EMAIL_FROM`. Redeploy.
+3. In Supabase → SQL editor, point the database at the endpoint (values are stored privately, RLS on, no policies):
+   ```sql
+   update shadow_report_settings set value = 'https://pharmaflow-swart.vercel.app/api/daily-report' where key = 'webhook_url';
+   update shadow_report_settings set value = '<same REPORT_SECRET>' where key = 'webhook_secret';
+   -- only if Vercel Deployment Protection is on:
+   update shadow_report_settings set value = '<bypass token>' where key = 'bypass_token';
+   -- change when/where the report runs:
+   update shadow_report_settings set value = '8' where key = 'send_hour';          -- e.g. 8 AM
+   update shadow_report_settings set value = 'America/Vancouver' where key = 'timezone';
+   ```
+4. Test now: `select public.generate_shadow_report('default', now() - interval '24 hours', now());` then
+   `select body from shadow_reports order by id desc limit 1;`
 
 ## Part 3 — Work PC (keystrokes into Kroll) — `kroll_tray_helper.py`
 
