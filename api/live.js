@@ -43,12 +43,16 @@ export default async function handler(req, res) {
     if (req.method === "GET") {
       const q = new URL(req.url, "http://x").searchParams;
       const limit = Math.min(Math.max(parseInt(q.get("limit") || "40", 10) || 40, 1), 100);
-      const [statsResp, rowsResp] = await Promise.all([
+      const [statsResp, rowsResp, hbResp] = await Promise.all([
         fetch(`${url}/rest/v1/rpc/live_stats`, { method: "POST", headers, body: "{}" }),
         fetch(`${url}/rest/v1/agent_sync_queue?select=${ROW_COLUMNS}&order=id.desc&limit=${limit}`, { headers }),
+        fetch(`${url}/rest/v1/agent_events?select=agent_version&event_type=eq.heartbeat&order=created_at.desc&limit=1`, { headers }),
       ]);
       if (!statsResp.ok || !rowsResp.ok) return send(res, 500, { error: "Query failed" });
-      return send(res, 200, { ok: true, stats: await statsResp.json(), rows: await rowsResp.json() });
+      const stats = await statsResp.json();
+      const hb = hbResp.ok ? await hbResp.json() : [];
+      if (stats?.heartbeat && hb?.[0]) stats.heartbeat.version = hb[0].agent_version;
+      return send(res, 200, { ok: true, stats, rows: await rowsResp.json() });
     }
 
     if (req.method === "POST") {

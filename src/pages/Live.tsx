@@ -30,7 +30,7 @@ interface LiveStats {
   fields: Record<string, FieldStat>;
   reasons: Record<string, number>;
   per_minute: Array<{ t: string; n: number }>;
-  heartbeat: { last_seen: string; host: string; mode: string; store_id: string } | null;
+  heartbeat: { last_seen: string; host: string; mode: string; store_id: string; version?: string } | null;
 }
 
 interface LiveRow {
@@ -158,7 +158,7 @@ export default function Live() {
           <Badge variant={agentOnline ? "default" : "destructive"} className="gap-1.5">
             <span className={`h-2 w-2 rounded-full ${agentOnline ? "animate-pulse bg-emerald-300" : "bg-red-300"}`} />
             Agent {agentOnline ? "online" : "OFFLINE"}
-            {stats?.heartbeat && ` · ${stats.heartbeat.host} · ${stats.heartbeat.mode}`}
+            {stats?.heartbeat && ` · ${stats.heartbeat.host} · ${stats.heartbeat.mode}${stats.heartbeat.version ? ` · agent v${stats.heartbeat.version}` : ""}`}
           </Badge>
           <span className="text-xs text-muted-foreground">
             last heartbeat {ago(stats?.heartbeat?.last_seen, now)} · last Rx {ago(stats?.last_received, now)}
