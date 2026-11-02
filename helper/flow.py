@@ -709,7 +709,10 @@ class KrollDB:
                 print(f"Table {schema}.{name} not found.")
                 return
             quote = lambda c: "[" + c.replace("]", "]]") + "]"
-            counts = ", ".join(f"COUNT({quote(c)})" for c, _ in cols)
+            # DATALENGTH works on text/ntext/image columns, where COUNT(col) is illegal.
+            counts = ", ".join(
+                f"SUM(CASE WHEN DATALENGTH({quote(c)}) > 0 THEN 1 ELSE 0 END)" for c, _ in cols
+            )
             cur.execute(f"SELECT COUNT(*), {counts} FROM [{schema}].[{name}] WITH (NOLOCK)")
             row = cur.fetchone()
         finally:
@@ -718,8 +721,9 @@ class KrollDB:
         print(f"\n{schema}.{name}: {total} rows\n")
         print(f"  {'column':<30} {'type':<14} {'non-empty':>10}")
         for (col, dtype), n in zip(cols, row[1:]):
-            pct = f"{100.0 * int(n) / total:5.1f}%" if total else "   n/a"
-            print(f"  {col:<30} {dtype:<14} {int(n):>10}  {pct}")
+            n = int(n or 0)
+            pct = f"{100.0 * n / total:5.1f}%" if total else "   n/a"
+            print(f"  {col:<30} {dtype:<14} {n:>10}  {pct}")
         print("\nA column that should hold real data but is ~0% filled is the wrong column.")
 
     def fetch_actual_rx(self, planned: Dict[str, Any]) -> Optional[Dict[str, Any]]:
