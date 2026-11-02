@@ -1021,6 +1021,12 @@ class PharmFlowAgent:
         for d in self.store.load_uncompared(limit=100):
             planned = json.loads(d["planned"])
             planned["pending_rx_id"] = d["pending_rx_id"]
+            # Pending rows rarely carry a usable date, so only accept staff entries filled on or after
+            # the day the agent first saw this pending Rx (local server time).
+            seen = dt.datetime.fromisoformat(d["decided_at"])
+            if seen.tzinfo is not None:
+                seen = seen.astimezone()
+            planned["date_created"] = seen.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
             actual = self.db.fetch_actual_rx(planned)
             if actual is None:
                 return                                   # [RxSchema] incomplete
