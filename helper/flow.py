@@ -67,6 +67,7 @@ CLOUD_TIMEOUT_SEC = 15
 DB_CONNECT_TIMEOUT_SEC = 10
 BATCH_SIZE = 50
 HEARTBEAT_EVERY_SEC = 300
+AGENT_CODE_VERSION = "1.2.0"     # reported in heartbeats so the dashboard shows which code is running
 COMPARE_EVERY_SEC = 600          # how often SHADOW looks for staff entries
 COMPARE_GIVE_UP_DAYS = 3         # an AUTO decision never entered by staff after this long is reported as such
 SPOOL_MAX_ATTEMPTS = 20          # then the item is parked as dead-letter
@@ -189,6 +190,9 @@ class AgentConfig:
         self.start_mode: str = cp.get("Agent", "START_MODE", fallback="NEW_ONLY").strip().upper()
         # Self-pay patients legitimately have no plan; only treat it as an exception if you ask for that.
         self.require_plan: bool = cp.getboolean("Agent", "REQUIRE_PLAN", fallback=False)
+        # Kroll creates the pending row first and fills patient/drug/qty a little later. A row that
+        # still looks incomplete is held back for this many seconds and re-read before it is judged.
+        self.settle_sec: int = max(0, cp.getint("Agent", "SETTLE_SEC", fallback=300))
 
         self.db_server: str = cp.get("Database", "SERVER", fallback="localhost").strip()
         self.db_name: str = cp.get("Database", "DATABASE", fallback="Pharmacy").strip()
@@ -934,6 +938,7 @@ class PharmFlowAgent:
         self.cloud = CloudClient(cfg, self.log)
         self._last_heartbeat = 0.0
         self._last_compare = -COMPARE_EVERY_SEC
+        self._first_seen: Dict[int, float] = {}      # pending id -> monotonic time first seen incomplete
         self._running = True
         self.log.info(
             "Config loaded | mode=%s | poll=%ss | db_user=%s | api=%s",
@@ -1056,7 +1061,7 @@ class PharmFlowAgent:
                 "mode": self.cfg.mode,
                 "store_id": self.cfg.store_id,
                 "agent": {
-                    "version": self.cfg.agent_version,
+                    "version": AGENT_CODE_VERSION,
                     "hostname": socket.gethostname(),
                     "timestamp_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
                 },
@@ -1078,10 +1083,23 @@ class PharmFlowAgent:
             rows = self.db.fetch_pending(watermark)
             if rows:
                 self.log.info("Polled %d new pending row(s)", len(rows))
+            deferred: List[int] = []
             for row in rows:
+                rid = row.get("PendingRxId")
+                if rid is None:
+                    continue
+                rid = int(rid)
+                if self.cfg.settle_sec and not self.store.is_processed(rid) and validate_row(row, self.cfg.require_plan):
+                    first = self._first_seen.setdefault(rid, time.monotonic())
+                    if time.monotonic() - first < self.cfg.settle_sec:
+                        deferred.append(rid)       # looks unfinished: look again on the next poll
+                        continue
+                self._first_seen.pop(rid, None)
                 self._process_row(row)
             if rows:
                 top = max(int(r["PendingRxId"]) for r in rows if r.get("PendingRxId") is not None)
+                if deferred:
+                    top = min(top, min(deferred) - 1)     # never move past a row still being filled in
                 self.store.set_watermark(max(top, watermark))
             self._flush_spool()
             self._compare_with_staff()
