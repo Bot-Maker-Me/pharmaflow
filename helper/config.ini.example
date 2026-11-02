@@ -49,3 +49,23 @@ TOKEN =
 REQUIRE_WINDOW_CHECK = true
 ; WINDOW_KROLL = kroll
 STEP_DELAY_SEC = 0.4
+
+; --- Shadow week: where the FINISHED prescriptions live (used by `flow.py --shadow-report`, read-only).
+; Fill from schema_report.txt. rx_link_col is the column holding the PendingRxId, if Kroll keeps one;
+; otherwise matching uses patient + drug + rx_created after the pending date.
+[RxSchema]
+; rx_table = dbo.Rx
+; rx_link_col =
+; rx_pat_id = PatId
+; rx_doc_id = DocId
+; rx_drug_id = DrugId
+; rx_qty = Qty
+; rx_refills = Refills
+; rx_sig = SigText
+; rx_created = DateCreated
+
+[Shadow]
+; the report says READY only if all of these hold
+GO_LIVE_MIN_MATCH = 0.995
+GO_LIVE_MIN_SAMPLES = 200
+GO_LIVE_MIN_AUTO_RATE = 0.80

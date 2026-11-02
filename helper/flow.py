@@ -10,6 +10,9 @@ Modes
   python flow.py --schema-report  write schema_report.txt (columns only, no PHI)
   python flow.py --discover   list tables/columns in the Kroll DB so you can
                               verify / fix the [Schema] mapping in config.ini
+  python flow.py --shadow-report
+                              compare what the agent WOULD have done with what staff actually
+                              entered in Kroll; prints match rates and a go-live verdict
   python flow.py --test       one connection + one poll, print counts, exit
 
 Design notes
@@ -68,6 +71,12 @@ KNOWN_TABLES: List[str] = [
     "Pat", "PatAdd", "PatPhone", "PatPln", "PatAlg",
     "Doc", "DocLicence", "DocPhone", "DocAdd",
     "Rx", "RxWorkflow", "RxWorkflowDetail", "RxPln", "RxPlnAdj", "RxScriptImage",
+]
+
+# [RxSchema] keys (all optional; --shadow-report needs the table + the compared columns).
+RX_SCHEMA_KEYS = [
+    "rx_table", "rx_link_col",       # rx_link_col = column holding the PendingRxId, if Kroll keeps one
+    "rx_pat_id", "rx_doc_id", "rx_drug_id", "rx_qty", "rx_refills", "rx_sig", "rx_created",
 ]
 
 # Identifiers (table / column names) are interpolated into SQL, so they are
@@ -186,6 +195,15 @@ class AgentConfig:
                 if cp.has_option("Schema", key):
                     self.schema[key] = cp.get("Schema", key).strip()
 
+        # Where the finished prescriptions live (used only by --shadow-report, read-only).
+        self.rx_schema: Dict[str, str] = {k: "" for k in RX_SCHEMA_KEYS}
+        if cp.has_section("RxSchema"):
+            for key in RX_SCHEMA_KEYS:
+                self.rx_schema[key] = cp.get("RxSchema", key, fallback="").strip()
+        self.go_live_min_match: float = cp.getfloat("Shadow", "GO_LIVE_MIN_MATCH", fallback=0.995)
+        self.go_live_min_samples: int = cp.getint("Shadow", "GO_LIVE_MIN_SAMPLES", fallback=200)
+        self.go_live_min_auto: float = cp.getfloat("Shadow", "GO_LIVE_MIN_AUTO_RATE", fallback=0.80)
+
         if self.mode not in ("SHADOW", "LIVE"):
             raise ValueError(f"Invalid MODE: {self.mode}. Use SHADOW or LIVE.")
         if self.poll_interval < 1:
@@ -197,6 +215,10 @@ class AgentConfig:
                 raise ValueError("LIVE mode needs Cloud API_URL and a real API_KEY in config.ini")
             if not self.api_url.lower().startswith("https://"):
                 raise ValueError("Cloud API_URL must be https:// (patient data is sent over it)")
+
+        for key, value in self.rx_schema.items():
+            if value and not IDENT_RE.match(value):
+                raise ValueError(f"[RxSchema] {key}={value!r} is not a valid SQL identifier")
 
         for key, value in self.schema.items():
             is_optional = key.endswith("_col") or key == "pending_status_value"
@@ -259,6 +281,13 @@ class LocalStore:
                     last_error    TEXT,
                     dead          INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS shadow_decisions (
+                    pending_rx_id INTEGER PRIMARY KEY,
+                    decided_at    TEXT NOT NULL,
+                    action        TEXT NOT NULL,       -- AUTO | EXCEPTION
+                    issues        TEXT NOT NULL,       -- JSON list
+                    planned       TEXT NOT NULL        -- JSON: what would be entered
+                );
                 CREATE TABLE IF NOT EXISTS meta (
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -309,6 +338,27 @@ class LocalStore:
                 (pending_rx_id, dt.datetime.now(dt.timezone.utc).isoformat()),
             )
             conn.commit()
+        finally:
+            conn.close()
+
+    # -- shadow decisions ----------------------------------------------------
+    def record_decision(self, pending_rx_id: int, action: str, issues: List[str], planned: Dict[str, Any]) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO shadow_decisions(pending_rx_id, decided_at, action, issues, planned) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (pending_rx_id, dt.datetime.now(dt.timezone.utc).isoformat(), action,
+                 json.dumps(issues), json.dumps(planned, default=str)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def load_decisions(self) -> List[sqlite3.Row]:
+        conn = self._connect()
+        try:
+            return list(conn.execute("SELECT * FROM shadow_decisions ORDER BY pending_rx_id").fetchall())
         finally:
             conn.close()
 
@@ -371,6 +421,51 @@ class LocalStore:
             return bool(dead)
         finally:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Automation rules: a row is AUTO only if nothing needed a human judgement call
+# ---------------------------------------------------------------------------
+
+def din_check_ok(din: str) -> bool:
+    """Health Canada DINs are 8 digits (no public check digit), so only format is checked."""
+    return din.isdigit() and len(din) == 8
+
+
+def validate_row(row: Dict[str, Any]) -> List[str]:
+    """Return the reasons this prescription must go to a human (empty list = AUTO)."""
+    issues: List[str] = []
+    if not row.get("PatientLastName"):
+        issues.append("patient not found")
+    if not row.get("DocLastName"):
+        issues.append("prescriber not found")
+    elif not row.get("DoctorLicence"):
+        issues.append("prescriber has no licence number")
+    if row.get("DrugId") in (None, ""):
+        issues.append("no drug")
+    try:
+        if float(row.get("Qty") or 0) <= 0:
+            issues.append("quantity missing or zero")
+    except (TypeError, ValueError):
+        issues.append("quantity not a number")
+    if not str(row.get("SigText") or "").strip():
+        issues.append("no sig / directions")
+    if not row.get("PrimaryInsurancePlan"):
+        issues.append("no insurance plan on file")
+    return issues
+
+
+def planned_entry(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "pat_id": row.get("PatId"),
+        "doc_id": row.get("DocId"),
+        "drug_id": row.get("DrugId"),
+        "qty": row.get("Qty"),
+        "refills": row.get("Refills"),
+        "sig": row.get("SigText"),
+        "plan_id": row.get("PrimaryInsurancePlan"),
+        "date_created": row.get("DateCreated"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -531,6 +626,35 @@ class KrollDB:
         print("\nAll table names:\n  " + "\n  ".join(sorted(tables)))
         print("\nCopy the right names into the [Schema] section of config.ini.")
 
+
+    def fetch_actual_rx(self, planned: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Find the prescription staff actually entered for a pending Rx (read-only)."""
+        r = self.cfg.rx_schema
+        cols = ["rx_pat_id", "rx_doc_id", "rx_drug_id", "rx_qty", "rx_refills", "rx_sig"]
+        select = ", ".join(f"{r[c]} AS {c}" for c in cols if r[c])
+        if not r["rx_table"] or not select:
+            return None
+        conn = self.ensure()
+        cur = conn.cursor()
+        try:
+            if r["rx_link_col"]:
+                cur.execute(f"SELECT TOP 1 {select} FROM {r['rx_table']} WHERE {r['rx_link_col']} = ?",
+                            [planned["pending_rx_id"]])
+            elif r["rx_pat_id"] and r["rx_drug_id"] and r["rx_created"]:
+                cur.execute(
+                    f"SELECT TOP 1 {select} FROM {r['rx_table']} "
+                    f"WHERE {r['rx_pat_id']} = ? AND {r['rx_drug_id']} = ? AND {r['rx_created']} >= ? "
+                    f"ORDER BY {r['rx_created']} ASC",
+                    [planned["pat_id"], planned["drug_id"], planned["date_created"]],
+                )
+            else:
+                return None
+            row = cur.fetchone()
+            if row is None:
+                return {}
+            return {col[0]: jsonable(val) for col, val in zip(cur.description, row)}
+        finally:
+            cur.close()
 
     def schema_report(self, out_path: Path) -> None:
         """Write column names + types (NO row data, so no PHI) for KNOWN_TABLES and
@@ -725,14 +849,18 @@ class PharmFlowAgent:
         if self.store.is_processed(pending_id):
             return
 
+        issues = validate_row(row)
+        self.store.record_decision(
+            pending_id, "EXCEPTION" if issues else "AUTO", issues, planned_entry(row)
+        )
+
         if self.cfg.mode == "SHADOW":
             # IDs only — no patient / doctor names in logs.
             self.log.info(
-                "[SHADOW] PendingRxId=%s | has_patient=%s | has_doctor=%s | drug=%s",
+                "[SHADOW] PendingRxId=%s | would=%s | issues=%s",
                 pending_id,
-                bool(row.get("PatientLastName")),
-                bool(row.get("DocLastName")),
-                row.get("DrugId"),
+                "EXCEPTION" if issues else "AUTO",
+                "; ".join(issues) or "-",
             )
             self.store.mark_processed(pending_id)
             return
@@ -832,9 +960,105 @@ class PharmFlowAgent:
             self.log.info("Agent stopped")
 
 
+def _norm(field: str, value: Any) -> str:
+    text = "" if value is None else str(value).strip()
+    if field in ("qty", "refills"):
+        try:
+            return f"{float(text):g}"
+        except ValueError:
+            return text
+    return " ".join(text.upper().split())
+
+
+def shadow_report(cfg: AgentConfig, out_path: Path) -> int:
+    log = setup_logging(cfg.agent_version)
+    store = LocalStore(SQLITE_PATH, log)
+    decisions = store.load_decisions()
+    if not decisions:
+        print("No shadow decisions recorded yet. Run `python flow.py` in SHADOW mode first.")
+        return 1
+
+    auto = [d for d in decisions if d["action"] == "AUTO"]
+    reasons: Dict[str, int] = {}
+    for d in decisions:
+        for issue in json.loads(d["issues"]):
+            reasons[issue] = reasons.get(issue, 0) + 1
+
+    lines = [
+        f"PharmFlow shadow report | {dt.datetime.now():%Y-%m-%d %H:%M} | host={socket.gethostname()}",
+        "",
+        f"Pending prescriptions seen : {len(decisions)}",
+        f"  would be AUTOMATIC       : {len(auto)}  ({len(auto) / len(decisions):.1%})",
+        f"  would go to a human      : {len(decisions) - len(auto)}",
+    ]
+    for reason, n in sorted(reasons.items(), key=lambda kv: -kv[1]):
+        lines.append(f"      - {reason}: {n}")
+
+    fields = [("pat_id", "rx_pat_id"), ("doc_id", "rx_doc_id"), ("drug_id", "rx_drug_id"),
+              ("qty", "rx_qty"), ("refills", "rx_refills"), ("sig", "rx_sig")]
+    usable = [(p, a) for p, a in fields if cfg.rx_schema.get(a)]
+    verdict_ok = False
+
+    if not cfg.rx_schema["rx_table"] or not usable:
+        lines += ["", "No [RxSchema] configured: cannot compare with what staff entered.",
+                  "Add rx_table and the rx_* columns (see config.ini.example), then re-run."]
+    else:
+        db = KrollDB(cfg, log)
+        compared = missing = 0
+        stats = {p: [0, 0] for p, _ in usable}   # field -> [matches, total]
+        examples: List[str] = []
+        for d in auto:
+            planned = json.loads(d["planned"])
+            planned["pending_rx_id"] = d["pending_rx_id"]
+            actual = db.fetch_actual_rx(planned)
+            if actual is None:
+                break
+            if not actual:
+                missing += 1
+                continue
+            compared += 1
+            for p, a in usable:
+                stats[p][1] += 1
+                if _norm(p, planned.get(p)) == _norm(p, actual.get(a)):
+                    stats[p][0] += 1
+                elif len(examples) < 25:
+                    examples.append(f"PendingRxId={d['pending_rx_id']} field={p} planned={planned.get(p)!r} actual={actual.get(a)!r}")
+        db.close()
+
+        lines += ["", f"Compared against staff entries : {compared} (not yet entered in Kroll: {missing})", "",
+                  "Field match rate (automatic decisions only):"]
+        worst = 1.0
+        for p, _ in usable:
+            m, t = stats[p]
+            rate = m / t if t else 0.0
+            worst = min(worst, rate) if t else worst
+            lines.append(f"  {p:<9} {rate:>7.2%}   ({m}/{t})")
+        if examples:
+            lines += ["", "Mismatch examples (IDs/values only, no names):"] + [f"  {e}" for e in examples]
+
+        auto_rate = len(auto) / len(decisions)
+        checks = [
+            (compared >= cfg.go_live_min_samples, f"at least {cfg.go_live_min_samples} compared (have {compared})"),
+            (worst >= cfg.go_live_min_match, f"every field >= {cfg.go_live_min_match:.1%} (worst {worst:.2%})"),
+            (auto_rate >= cfg.go_live_min_auto, f"automatic rate >= {cfg.go_live_min_auto:.0%} (have {auto_rate:.1%})"),
+        ]
+        verdict_ok = all(ok for ok, _ in checks)
+        lines += ["", "GO-LIVE CHECKS"] + [f"  [{'PASS' if ok else 'FAIL'}] {text}" for ok, text in checks]
+        lines += ["", "VERDICT: " + ("READY for a supervised pilot" if verdict_ok else "NOT READY - keep shadowing / tweak rules")]
+        lines += ["Note: 'sig' differences are often legitimate staff edits - review the examples before tuning."]
+
+    text = "\n".join(lines) + "\n"
+    out_path.write_text(text, encoding="utf-8")
+    print(text)
+    print(f"Saved to {out_path} (no patient names)")
+    return 0 if verdict_ok else 3
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="PharmFlow Kroll poller")
     parser.add_argument("--discover", action="store_true", help="list DB tables/columns and exit")
+    parser.add_argument("--shadow-report", action="store_true",
+                        help="compare shadow decisions with what staff entered; prints go-live verdict")
     parser.add_argument("--schema-report", action="store_true",
                         help="write schema_report.txt (columns of your Kroll tables, no data) and exit")
     parser.add_argument("--test", action="store_true", help="connect, poll once, print counts, exit")
@@ -845,6 +1069,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:
         print(f"FATAL config error: {exc}", file=sys.stderr)
         return 1
+
+    if args.shadow_report:
+        return shadow_report(cfg, BASE_DIR / "shadow_report.txt")
 
     if args.schema_report:
         logger = setup_logging(cfg.agent_version)
