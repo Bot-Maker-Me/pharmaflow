@@ -43,7 +43,8 @@ pending_refills = UnlimitedRefills
 pending_sig = Sig
 pending_created = WrittenDate
 pending_status = Status
-pending_status_value = New
+; Status is numeric in this Kroll: 1 = new/waiting (checked against live counts)
+pending_status_value = 1
 pat_table = dbo.Pat
 pat_id = ID
 pat_first = FirstName
@@ -55,7 +56,8 @@ addr_line = Address1
 addr_primary_col = UseForBilling
 plan_table = dbo.PatPln
 plan_pat_id = PatID
-plan_id = PlanID
+; PatPln.PlanID is empty in this Kroll; SubPlanID is the filled column
+plan_id = SubPlanID
 plan_seq_col = Sequence
 plan_deleted_col = Deleted
 doc_table = dbo.Doc
@@ -80,15 +82,16 @@ STEP_DELAY_SEC = 0.4
 ; Fill from schema_report.txt. rx_link_col is the column holding the PendingRxId, if Kroll keeps one;
 ; otherwise matching uses patient + drug + rx_created after the pending date.
 [RxSchema]
-; rx_table = dbo.Rx
-; rx_link_col =
-; rx_pat_id = PatId
-; rx_doc_id = DocId
-; rx_drug_id = DrugId
-; rx_qty = Qty
-; rx_refills = Refills
-; rx_sig = SigText
-; rx_created = DateCreated
+; What staff actually entered in Kroll (dbo.Rx). No link column exists, so flow.py matches on
+; patient + drug + filled on/after the day the pending Rx was first seen.
+rx_table = dbo.Rx
+rx_pat_id = PatID
+rx_doc_id = DocID
+rx_drug_id = DrgID
+rx_qty = DispQty
+rx_refills = UnlimitedRefills
+rx_sig = SIG
+rx_created = FillDate
 
 [Shadow]
 ; the report says READY only if all of these hold
