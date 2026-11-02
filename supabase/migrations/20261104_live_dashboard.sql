@@ -162,3 +162,4 @@ BEGIN
 END $$;
 
 REVOKE ALL ON FUNCTION public.live_stats(TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.live_stats(TEXT) TO service_role;
