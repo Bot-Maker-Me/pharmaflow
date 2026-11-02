@@ -85,7 +85,11 @@ async function handleHeartbeat(body, cfg, res) {
       agent_version: str(agent.version),
       event_type: "heartbeat",
       message: str(body.mode),
-      meta: { store_id: String(body.store_id || "default").slice(0, 64), mode: str(body.mode) },
+      meta: {
+        store_id: String(body.store_id || "default").slice(0, 64),
+        mode: str(body.mode),
+        incomplete: Number.isSafeInteger(body.incomplete) ? body.incomplete : null,
+      },
     }),
   });
   if (!resp.ok) return send(res, 500, { error: "Failed to store heartbeat" });

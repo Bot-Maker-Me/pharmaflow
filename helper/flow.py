@@ -68,6 +68,7 @@ DB_CONNECT_TIMEOUT_SEC = 10
 BATCH_SIZE = 50
 HEARTBEAT_EVERY_SEC = 300
 AGENT_CODE_VERSION = "1.2.0"     # reported in heartbeats so the dashboard shows which code is running
+RECHECK_EVERY_SEC = 60            # how often rows still being filled in by staff are re-read
 COMPARE_EVERY_SEC = 600          # how often SHADOW looks for staff entries
 COMPARE_GIVE_UP_DAYS = 3         # an AUTO decision never entered by staff after this long is reported as such
 SPOOL_MAX_ATTEMPTS = 20          # then the item is parked as dead-letter
@@ -190,9 +191,10 @@ class AgentConfig:
         self.start_mode: str = cp.get("Agent", "START_MODE", fallback="NEW_ONLY").strip().upper()
         # Self-pay patients legitimately have no plan; only treat it as an exception if you ask for that.
         self.require_plan: bool = cp.getboolean("Agent", "REQUIRE_PLAN", fallback=False)
-        # Kroll creates the pending row first and fills patient/drug/qty a little later. A row that
-        # still looks incomplete is held back for this many seconds and re-read before it is judged.
-        self.settle_sec: int = max(0, cp.getint("Agent", "SETTLE_SEC", fallback=300))
+        # Kroll creates a pending row first and fills patient / prescriber / drug / quantity later
+        # (or never). Rows missing any of those are tracked as "incomplete" and re-read until they are
+        # filled in, for at most this many hours; then they are judged as they are. 0 = judge at once.
+        self.wait_hours: float = max(0.0, cp.getfloat("Agent", "WAIT_HOURS", fallback=24.0))
 
         self.db_server: str = cp.get("Database", "SERVER", fallback="localhost").strip()
         self.db_name: str = cp.get("Database", "DATABASE", fallback="Pharmacy").strip()
@@ -314,6 +316,10 @@ class LocalStore:
                     pending_rx_id INTEGER PRIMARY KEY,
                     compared_at   TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS incomplete (
+                    pending_rx_id INTEGER PRIMARY KEY,
+                    first_seen    TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS meta (
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -371,6 +377,39 @@ class LocalStore:
                 (pending_rx_id, dt.datetime.now(dt.timezone.utc).isoformat()),
             )
             conn.commit()
+        finally:
+            conn.close()
+
+    # -- incomplete rows (waiting for Kroll staff to fill them in) -----------
+    def add_incomplete(self, pending_rx_id: int) -> None:
+        conn = self._connect()
+        try:
+            conn.execute("INSERT OR IGNORE INTO incomplete(pending_rx_id, first_seen) VALUES (?, ?)",
+                         (pending_rx_id, dt.datetime.now(dt.timezone.utc).isoformat()))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def load_incomplete(self, limit: int = 100) -> List[Tuple[int, str]]:
+        conn = self._connect()
+        try:
+            return [(int(r["pending_rx_id"]), r["first_seen"]) for r in conn.execute(
+                "SELECT pending_rx_id, first_seen FROM incomplete ORDER BY first_seen ASC LIMIT ?", (limit,))]
+        finally:
+            conn.close()
+
+    def drop_incomplete(self, pending_rx_id: int) -> None:
+        conn = self._connect()
+        try:
+            conn.execute("DELETE FROM incomplete WHERE pending_rx_id = ?", (pending_rx_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def count_incomplete(self) -> int:
+        conn = self._connect()
+        try:
+            return int(conn.execute("SELECT COUNT(*) FROM incomplete").fetchone()[0])
         finally:
             conn.close()
 
@@ -509,6 +548,24 @@ def validate_row(row: Dict[str, Any], require_plan: bool = False) -> List[str]:
     return issues
 
 
+def _present(value: Any) -> bool:
+    return value not in (None, "", 0, "0")
+
+
+def core_complete(row: Dict[str, Any]) -> bool:
+    """Patient, prescriber, drug and a positive quantity are all filled in."""
+    try:
+        qty_ok = float(row.get("Qty") or 0) > 0
+    except (TypeError, ValueError):
+        qty_ok = False
+    return _present(row.get("PatId")) and _present(row.get("DocId")) and _present(row.get("DrugId")) and qty_ok
+
+
+def is_blank_stub(row: Dict[str, Any]) -> bool:
+    """No patient and no drug at all: an empty placeholder, not a prescription."""
+    return not _present(row.get("PatId")) and not _present(row.get("DrugId"))
+
+
 def planned_entry(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "pat_id": row.get("PatId"),
@@ -548,7 +605,7 @@ class KrollDB:
             "ApplicationIntent=ReadOnly;"
         )
 
-    def _build_query(self) -> str:
+    def _build_query(self, where: Optional[str] = None, top: int = BATCH_SIZE, with_status: bool = True) -> str:
         s = self.cfg.schema
 
         primary = f"AND a.{s['addr_primary_col']} = 1" if s["addr_primary_col"] else ""
@@ -556,15 +613,16 @@ class KrollDB:
         plan_live = f"AND (pp.{s['plan_deleted_col']} = 0 OR pp.{s['plan_deleted_col']} IS NULL)" if s["plan_deleted_col"] else ""
         status = (
             f"AND p.{s['pending_status']} = ?"
-            if s["pending_status"] and s["pending_status_value"]
+            if with_status and s["pending_status"] and s["pending_status_value"]
             else ""
         )
+        where = where or f"p.{s['pending_id']} > ?"
 
         # OUTER APPLY TOP 1: exactly one row per pending Rx even if a patient has
         # several addresses / plans or a doctor several licences (a plain LEFT JOIN
         # would duplicate rows and break de-duplication).
         return f"""
-        SELECT TOP {BATCH_SIZE}
+        SELECT TOP {top}
             p.{s['pending_id']}      AS PendingRxId,
             p.{s['pending_pat_id']}  AS PatId,
             pt.{s['pat_first']}      AS PatientFirstName,
@@ -604,7 +662,7 @@ class KrollDB:
             FROM {s['lic_table']} l
             WHERE l.{s['lic_doc_id']} = d.{s['doc_id']}
         ) dl
-        WHERE p.{s['pending_id']} > ?
+        WHERE {where}
         {status}
         ORDER BY p.{s['pending_id']} ASC
         """
@@ -654,6 +712,22 @@ class KrollDB:
                 {col: jsonable(val) for col, val in zip(columns, row)}
                 for row in cur.fetchall()
             ]
+        finally:
+            cur.close()
+
+    def fetch_by_ids(self, ids: List[int]) -> List[Dict[str, Any]]:
+        """Re-read specific pending rows (no status filter: a row may have changed status)."""
+        if not ids:
+            return []
+        s = self.cfg.schema
+        sql = self._build_query(where=f"p.{s['pending_id']} IN ({','.join('?' * len(ids))})",
+                                top=len(ids), with_status=False)
+        conn = self.ensure()
+        cur = conn.cursor()
+        try:
+            cur.execute(sql, list(ids))
+            columns = [col[0] for col in cur.description]
+            return [{col: jsonable(val) for col, val in zip(columns, row)} for row in cur.fetchall()]
         finally:
             cur.close()
 
@@ -938,7 +1012,7 @@ class PharmFlowAgent:
         self.cloud = CloudClient(cfg, self.log)
         self._last_heartbeat = 0.0
         self._last_compare = -COMPARE_EVERY_SEC
-        self._first_seen: Dict[int, float] = {}      # pending id -> monotonic time first seen incomplete
+        self._last_recheck = -RECHECK_EVERY_SEC
         self._running = True
         self.log.info(
             "Config loaded | mode=%s | poll=%ss | db_user=%s | api=%s",
@@ -1060,6 +1134,7 @@ class PharmFlowAgent:
                 "type": "heartbeat",
                 "mode": self.cfg.mode,
                 "store_id": self.cfg.store_id,
+                "incomplete": self.store.count_incomplete(),
                 "agent": {
                     "version": AGENT_CODE_VERSION,
                     "hostname": socket.gethostname(),
@@ -1077,30 +1152,50 @@ class PharmFlowAgent:
             self.store.set_watermark(top)
             self.log.info("First run (START_MODE=NEW_ONLY): ignoring existing rows up to PendingRxId=%s", top)
 
+    def _recheck_incomplete(self) -> None:
+        if time.monotonic() - self._last_recheck < RECHECK_EVERY_SEC:
+            return
+        self._last_recheck = time.monotonic()
+        items = self.store.load_incomplete(100)
+        if not items:
+            return
+        rows = {int(r["PendingRxId"]): r for r in self.db.fetch_by_ids([i for i, _ in items])}
+        now = dt.datetime.now(dt.timezone.utc)
+        limit = dt.timedelta(hours=self.cfg.wait_hours)
+        for pid, first_seen in items:
+            row = rows.get(pid)
+            if row is None:                                   # deleted in Kroll
+                self.store.drop_incomplete(pid)
+                self.log.info("PendingRxId=%s no longer exists in Kroll; dropped", pid)
+            elif core_complete(row):
+                self._process_row(row)
+                self.store.drop_incomplete(pid)
+            elif now - dt.datetime.fromisoformat(first_seen) > limit:
+                if is_blank_stub(row):
+                    self.store.mark_processed(pid)            # never filled in: ignore, do not report
+                    self.log.info("Ignored empty placeholder PendingRxId=%s", pid)
+                else:
+                    self._process_row(row)                    # judged as it is -> EXCEPTION
+                self.store.drop_incomplete(pid)
+
     def run_once(self) -> int:
         try:
             watermark = self.store.get_watermark()
             rows = self.db.fetch_pending(watermark)
             if rows:
                 self.log.info("Polled %d new pending row(s)", len(rows))
-            deferred: List[int] = []
             for row in rows:
                 rid = row.get("PendingRxId")
-                if rid is None:
+                if rid is None or self.store.is_processed(int(rid)):
                     continue
-                rid = int(rid)
-                if self.cfg.settle_sec and not self.store.is_processed(rid) and validate_row(row, self.cfg.require_plan):
-                    first = self._first_seen.setdefault(rid, time.monotonic())
-                    if time.monotonic() - first < self.cfg.settle_sec:
-                        deferred.append(rid)       # looks unfinished: look again on the next poll
-                        continue
-                self._first_seen.pop(rid, None)
+                if self.cfg.wait_hours and not core_complete(row):
+                    self.store.add_incomplete(int(rid))     # staff are still filling it in: re-read later
+                    continue
                 self._process_row(row)
             if rows:
                 top = max(int(r["PendingRxId"]) for r in rows if r.get("PendingRxId") is not None)
-                if deferred:
-                    top = min(top, min(deferred) - 1)     # never move past a row still being filled in
                 self.store.set_watermark(max(top, watermark))
+            self._recheck_incomplete()
             self._flush_spool()
             self._compare_with_staff()
             self._heartbeat()
