@@ -97,6 +97,26 @@ Requirements: Windows, Python 3.10+ (tick *Add to PATH*), **ODBC Driver 17 for S
    Trigger *At startup* → Action: program `C:\PharmFlow\helper\.venv\Scripts\python.exe`,
    arguments `flow.py`, *Start in* `C:\PharmFlow\helper` → Settings: restart on failure every 1 minute.
 
+### Shadow week (compare before going automatic)
+
+In `MODE = SHADOW`, `flow.py` sends nothing anywhere. For every pending prescription it records a decision:
+**AUTO** (nothing needed a human judgement) or **EXCEPTION** (e.g. prescriber has no licence, no insurance plan,
+no sig, quantity 0) plus the exact values it *would* have entered.
+
+1. Fill `[RxSchema]` in `config.ini` from `schema_report.txt` (the table where finished prescriptions live and its
+   patient / doctor / drug / qty / refills / sig / created columns).
+2. Leave `python flow.py` running for 7 days, then run:
+   ```powershell
+   python flow.py --shadow-report
+   ```
+   It compares each AUTO decision with what staff actually entered in Kroll, prints a match rate per field,
+   example mismatches (IDs only, no names), and a go-live verdict (default thresholds: 200+ compared, every field
+   >= 99.5%, at least 80% of prescriptions automatic; tune in `[Shadow]`).
+3. Look at the mismatch examples and exception reasons, adjust the rules (`validate_row` in `flow.py`) or
+   `[Schema]`, **reset the week** (delete `shadow_queue.db`) and run another week. Repeat until the verdict is READY.
+4. Going live is then a supervised pilot (EXCEPTION items always go to a person), not a switch to unattended
+   billing. Claim submission itself must stay inside Kroll's own workflow.
+
 ## Part 3 — Work PC (keystrokes into Kroll) — `kroll_tray_helper.py`
 
 1. Same Python + venv + `pip install -r requirements.txt` steps in a folder on the work PC
