@@ -30,7 +30,7 @@ interface LiveStats {
   fields: Record<string, FieldStat>;
   reasons: Record<string, number>;
   per_minute: Array<{ t: string; n: number }>;
-  heartbeat: { last_seen: string; host: string; mode: string; store_id: string; version?: string } | null;
+  heartbeat: { last_seen: string; host: string; mode: string; store_id: string; version?: string; incomplete?: number | null } | null;
 }
 
 interface LiveRow {
@@ -163,6 +163,9 @@ export default function Live() {
           <span className="text-xs text-muted-foreground">
             last heartbeat {ago(stats?.heartbeat?.last_seen, now)} · last Rx {ago(stats?.last_received, now)}
           </span>
+          {!!stats?.heartbeat?.incomplete && (
+            <Badge variant="outline">{stats.heartbeat.incomplete} waiting for Kroll staff to fill in</Badge>
+          )}
           {flowing && (
             <Badge variant="outline" className="gap-1">
               <Activity className="h-3 w-3 animate-pulse" /> data flowing

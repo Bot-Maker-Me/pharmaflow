@@ -11,8 +11,8 @@ STORE_ID = default
 START_MODE = NEW_ONLY
 ; true = a missing insurance plan makes the row an EXCEPTION. Keep false until PatPln columns are verified.
 REQUIRE_PLAN = false
-; Seconds to wait for Kroll to finish filling a new pending row before judging it.
-SETTLE_SEC = 300
+; Hours to wait for staff to fill in a new pending row (patient/prescriber/drug/qty) before judging it.
+WAIT_HOURS = 24
 
 [Database]
 SERVER = localhost
