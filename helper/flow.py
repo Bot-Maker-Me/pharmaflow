@@ -13,6 +13,12 @@ Modes
   python flow.py --shadow-report
                               compare what the agent WOULD have done with what staff actually
                               entered in Kroll; prints match rates and a go-live verdict
+  python flow.py --skip-backlog
+                              mark every row currently in the pending table as already seen, so only
+                              prescriptions that arrive from now on are processed (start of a clean shadow week)
+  python flow.py --profile TABLE
+                              how many rows / how many non-empty values each column of TABLE has
+                              (no values are shown) - use it to find the right column names
   python flow.py --test       one connection + one poll, print counts, exit
 
 Design notes
@@ -178,6 +184,10 @@ class AgentConfig:
         # Same value on every PC of one pharmacy: all PCs that read the same Kroll DB
         # then de-duplicate to a single row per prescription in the cloud.
         self.store_id: str = cp.get("Agent", "STORE_ID", fallback="default").strip() or "default"
+        # NEW_ONLY: on the very first run, ignore everything already in the pending table.
+        self.start_mode: str = cp.get("Agent", "START_MODE", fallback="NEW_ONLY").strip().upper()
+        # Self-pay patients legitimately have no plan; only treat it as an exception if you ask for that.
+        self.require_plan: bool = cp.getboolean("Agent", "REQUIRE_PLAN", fallback=False)
 
         self.db_server: str = cp.get("Database", "SERVER", fallback="localhost").strip()
         self.db_name: str = cp.get("Database", "DATABASE", fallback="Pharmacy").strip()
@@ -209,6 +219,8 @@ class AgentConfig:
         # SHADOW also records to Supabase (decisions + comparisons) when the cloud is configured.
         self.cloud_enabled: bool = bool(self.api_url and self.api_key and "CHANGE_ME" not in self.api_key)
 
+        if self.start_mode not in ("NEW_ONLY", "ALL"):
+            raise ValueError("START_MODE must be NEW_ONLY or ALL")
         if self.mode not in ("SHADOW", "LIVE"):
             raise ValueError(f"Invalid MODE: {self.mode}. Use SHADOW or LIVE.")
         if self.poll_interval < 1:
@@ -314,6 +326,13 @@ class LocalStore:
         try:
             row = conn.execute("SELECT value FROM meta WHERE key='watermark'").fetchone()
             return int(row["value"]) if row else 0
+        finally:
+            conn.close()
+
+    def has_watermark(self) -> bool:
+        conn = self._connect()
+        try:
+            return conn.execute("SELECT 1 FROM meta WHERE key='watermark'").fetchone() is not None
         finally:
             conn.close()
 
@@ -462,7 +481,7 @@ def din_check_ok(din: str) -> bool:
     return din.isdigit() and len(din) == 8
 
 
-def validate_row(row: Dict[str, Any]) -> List[str]:
+def validate_row(row: Dict[str, Any], require_plan: bool = False) -> List[str]:
     """Return the reasons this prescription must go to a human (empty list = AUTO)."""
     issues: List[str] = []
     if not row.get("PatientLastName"):
@@ -480,7 +499,7 @@ def validate_row(row: Dict[str, Any]) -> List[str]:
         issues.append("quantity not a number")
     if not str(row.get("SigText") or "").strip():
         issues.append("no sig / directions")
-    if not row.get("PrimaryInsurancePlan"):
+    if require_plan and not row.get("PrimaryInsurancePlan"):
         issues.append("no insurance plan on file")
     return issues
 
@@ -656,6 +675,49 @@ class KrollDB:
         print("\nAll table names:\n  " + "\n  ".join(sorted(tables)))
         print("\nCopy the right names into the [Schema] section of config.ini.")
 
+
+    def max_pending_id(self) -> int:
+        s = self.cfg.schema
+        conn = self.ensure()
+        cur = conn.cursor()
+        try:
+            cur.execute(f"SELECT MAX({s['pending_id']}) FROM {s['pending_table']}")
+            value = cur.fetchone()[0]
+            return int(value) if value is not None else 0
+        finally:
+            cur.close()
+
+    def profile_table(self, table: str) -> None:
+        """Print per-column non-empty counts for one table. Shows NO row values."""
+        if not IDENT_RE.match(table):
+            raise ValueError(f"{table!r} is not a valid table name")
+        schema, _, name = table.rpartition(".")
+        schema = schema or "dbo"
+        conn = self.ensure()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+                [schema, name],
+            )
+            cols = [(c, t) for c, t in cur.fetchall()]
+            if not cols:
+                print(f"Table {schema}.{name} not found.")
+                return
+            quote = lambda c: "[" + c.replace("]", "]]") + "]"
+            counts = ", ".join(f"COUNT({quote(c)})" for c, _ in cols)
+            cur.execute(f"SELECT COUNT(*), {counts} FROM [{schema}].[{name}] WITH (NOLOCK)")
+            row = cur.fetchone()
+        finally:
+            cur.close()
+        total = int(row[0])
+        print(f"\n{schema}.{name}: {total} rows\n")
+        print(f"  {'column':<30} {'type':<14} {'non-empty':>10}")
+        for (col, dtype), n in zip(cols, row[1:]):
+            pct = f"{100.0 * int(n) / total:5.1f}%" if total else "   n/a"
+            print(f"  {col:<30} {dtype:<14} {int(n):>10}  {pct}")
+        print("\nA column that should hold real data but is ~0% filled is the wrong column.")
 
     def fetch_actual_rx(self, planned: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Find the prescription staff actually entered for a pending Rx (read-only)."""
@@ -880,7 +942,7 @@ class PharmFlowAgent:
         if self.store.is_processed(pending_id):
             return
 
-        issues = validate_row(row)
+        issues = validate_row(row, self.cfg.require_plan)
         self.store.record_decision(
             pending_id, "EXCEPTION" if issues else "AUTO", issues, planned_entry(row)
         )
@@ -990,6 +1052,13 @@ class PharmFlowAgent:
         if not ok:
             self.log.warning("Heartbeat failed: %s", err)
 
+    def apply_start_mode(self) -> None:
+        """First ever run in NEW_ONLY mode: skip everything already in the pending table."""
+        if self.cfg.start_mode == "NEW_ONLY" and not self.store.has_watermark():
+            top = self.db.max_pending_id()
+            self.store.set_watermark(top)
+            self.log.info("First run (START_MODE=NEW_ONLY): ignoring existing rows up to PendingRxId=%s", top)
+
     def run_once(self) -> int:
         try:
             watermark = self.store.get_watermark()
@@ -1015,6 +1084,10 @@ class PharmFlowAgent:
     def run(self) -> None:
         self.log.info("Entering poll loop (Ctrl+C to stop)")
         try:
+            try:
+                self.apply_start_mode()
+            except Exception as exc:  # DB down at boot: the loop retries normally, baseline is retried next start
+                self.log.error("Could not set the start baseline yet: %s", exc)
             while self._running:
                 started = time.monotonic()
                 fetched = self.run_once()
@@ -1135,6 +1208,9 @@ def shadow_report(cfg: AgentConfig, out_path: Path) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="PharmFlow Kroll poller")
     parser.add_argument("--discover", action="store_true", help="list DB tables/columns and exit")
+    parser.add_argument("--skip-backlog", action="store_true",
+                        help="ignore every row already in the pending table; process only new ones")
+    parser.add_argument("--profile", metavar="TABLE", help="print per-column fill counts (no values) and exit")
     parser.add_argument("--shadow-report", action="store_true",
                         help="compare shadow decisions with what staff entered; prints go-live verdict")
     parser.add_argument("--schema-report", action="store_true",
@@ -1147,6 +1223,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:
         print(f"FATAL config error: {exc}", file=sys.stderr)
         return 1
+
+    if args.profile:
+        logger = setup_logging(cfg.agent_version)
+        KrollDB(cfg, logger).profile_table(args.profile)
+        return 0
+
+    if args.skip_backlog:
+        logger = setup_logging(cfg.agent_version)
+        top = KrollDB(cfg, logger).max_pending_id()
+        LocalStore(SQLITE_PATH, logger).set_watermark(top)
+        print(f"Done: rows up to PendingRxId={top} will be ignored. Restart the agent (and press "
+              "'Start shadow week' on the Live dashboard).")
+        return 0
 
     if args.shadow_report:
         return shadow_report(cfg, BASE_DIR / "shadow_report.txt")

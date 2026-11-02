@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { to: "/app", label: "Intake", icon: Home, end: true },
+  { to: "/app/live", label: "Live", icon: Activity, end: false },
   { to: "/app/inbox", label: "Kroll inbox", icon: Inbox, end: false },
   { to: "/app/verify", label: "Verification", icon: ShieldCheck, end: false },
   { to: "/app/queue", label: "Queue", icon: ListChecks, end: false },
@@ -15,6 +16,8 @@ const NAV = [
 ];
 
 function titleFor(pathname: string): { title: string; subtitle: string } {
+  if (pathname.includes("/live"))
+    return { title: "Live shadow monitor", subtitle: "Agent data flowing in, compared with what staff enter" };
   if (pathname.includes("/verify"))
     return { title: "Verification workspace", subtitle: "Side-by-side document review and data entry" };
   if (pathname.includes("/queue"))
