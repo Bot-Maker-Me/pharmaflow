@@ -118,6 +118,7 @@ DEFAULT_SCHEMA: Dict[str, str] = {
     "plan_pat_id": "PatId",
     "plan_id": "PlanId",
     "plan_seq_col": "SeqNum",         # leave empty if there is no such column
+    "plan_deleted_col": "",           # e.g. Deleted -> only plans where Deleted = 0; empty = no filter
     "doc_table": "dbo.Doc",
     "doc_id": "DocId",
     "doc_first": "FirstNm",
@@ -548,6 +549,7 @@ class KrollDB:
 
         primary = f"AND a.{s['addr_primary_col']} = 1" if s["addr_primary_col"] else ""
         plan_order = f"ORDER BY pp.{s['plan_seq_col']} ASC" if s["plan_seq_col"] else ""
+        plan_live = f"AND (pp.{s['plan_deleted_col']} = 0 OR pp.{s['plan_deleted_col']} IS NULL)" if s["plan_deleted_col"] else ""
         status = (
             f"AND p.{s['pending_status']} = ?"
             if s["pending_status"] and s["pending_status_value"]
@@ -588,6 +590,7 @@ class KrollDB:
             SELECT TOP 1 pp.{s['plan_id']}
             FROM {s['plan_table']} pp
             WHERE pp.{s['plan_pat_id']} = pt.{s['pat_id']}
+            {plan_live}
             {plan_order}
         ) pp
         LEFT JOIN {s['doc_table']} d

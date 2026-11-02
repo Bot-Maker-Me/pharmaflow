@@ -31,19 +31,40 @@ API_KEY = CHANGE_ME_long_random_token
 ; Run `python flow.py --discover` on the Kroll server, then override any names
 ; that differ. Everything below shows the defaults, commented out.
 [Schema]
-; pending_table = dbo.PendingNewRx
-; pending_id = PendingRxId
-; pending_status = Status
-; pending_status_value = New
-; pat_table = dbo.Pat
-; pat_first = FirstNm
-; pat_last = LastNm
-; pat_dob = BirthDate
-; addr_table = dbo.PatAdd
-; plan_table = dbo.PatPln
-; doc_table = dbo.Doc
-; lic_table = dbo.DocLicence
-; lic_num = LicenceNum
+; Verified against this pharmacy's Kroll (PendingNewRx / PatAdd / PatPln column lists).
+pending_table = dbo.PendingNewRx
+pending_id = Id
+pending_pat_id = PatId
+pending_doc_id = DocId
+; DrgId = Kroll's internal drug id. DIN is often empty on pending rows. Check with: python flow.py --profile PendingNewRx
+pending_drug_id = DrgId
+pending_qty = DispQty
+pending_refills = UnlimitedRefills
+pending_sig = Sig
+pending_created = WrittenDate
+pending_status = Status
+pending_status_value = New
+pat_table = dbo.Pat
+pat_id = ID
+pat_first = FirstName
+pat_last = LastName
+pat_dob = Birthday
+addr_table = dbo.PatAdd
+addr_pat_id = PatID
+addr_line = Address1
+addr_primary_col = UseForBilling
+plan_table = dbo.PatPln
+plan_pat_id = PatID
+plan_id = PlanID
+plan_seq_col = Sequence
+plan_deleted_col = Deleted
+doc_table = dbo.Doc
+doc_id = ID
+doc_first = FirstName
+doc_last = LastName
+lic_table = dbo.DocLicence
+lic_doc_id = DocID
+lic_num = Licence
 
 [Helper]
 ; Origins allowed to call the keystroke helper (comma separated, no trailing /)
