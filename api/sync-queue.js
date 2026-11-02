@@ -55,6 +55,25 @@ function isIsoDate(value) {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
 
+async function handleShadowResult(body, cfg, res) {
+  const storeId = String(body.store_id || "default").slice(0, 64);
+  const id = Number(body.pending_rx_id);
+  if (!Number.isSafeInteger(id) || id < 0) return send(res, 400, { error: "pending_rx_id is required" });
+  if (!cfg) return send(res, 202, { ok: true, stored: false });
+  const patch = {
+    actual: body.actual && typeof body.actual === "object" ? body.actual : null,
+    field_match: body.field_match && typeof body.field_match === "object" ? body.field_match : null,
+    compared_at: new Date().toISOString(),
+  };
+  const resp = await fetch(
+    `${cfg.url}/rest/v1/agent_sync_queue?store_id=eq.${encodeURIComponent(storeId)}&pending_rx_id=eq.${id}`,
+    { method: "PATCH", headers: sbHeaders(cfg.key, { Prefer: "return=representation" }), body: JSON.stringify(patch) },
+  );
+  if (!resp.ok) return send(res, 500, { error: "Failed to store comparison" });
+  const rows = await resp.json();
+  return send(res, rows.length ? 200 : 404, { ok: rows.length > 0, updated: rows.length });
+}
+
 async function handleHeartbeat(body, cfg, res) {
   const agent = body.agent || {};
   if (!cfg) return send(res, 202, { ok: true, stored: false });
@@ -66,6 +85,7 @@ async function handleHeartbeat(body, cfg, res) {
       agent_version: str(agent.version),
       event_type: "heartbeat",
       message: str(body.mode),
+      meta: { store_id: String(body.store_id || "default").slice(0, 64), mode: str(body.mode) },
     }),
   });
   if (!resp.ok) return send(res, 500, { error: "Failed to store heartbeat" });
@@ -121,6 +141,7 @@ export default async function handler(req, res) {
 
   try {
     if (body.type === "heartbeat") return await handleHeartbeat(body, cfg, res);
+    if (body.type === "shadow_result") return await handleShadowResult(body, cfg, res);
 
     const pending = body.pending_rx || {};
     const patient = body.patient || {};
@@ -158,6 +179,9 @@ export default async function handler(req, res) {
       agent_version: str(agent.version),
       agent_hostname: str(agent.hostname),
       agent_mode: str(body.mode),
+      decision: body.decision?.action === "AUTO" || body.decision?.action === "EXCEPTION" ? body.decision.action : null,
+      decision_issues: Array.isArray(body.decision?.issues) ? body.decision.issues.map(String).slice(0, 20) : null,
+      planned: body.decision?.planned && typeof body.decision.planned === "object" ? body.decision.planned : null,
       raw_payload: body,
       status: "received",
     };
