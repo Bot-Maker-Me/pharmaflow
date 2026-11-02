@@ -136,6 +136,6 @@ Requirements: Windows, Python 3.10+ (tick *Add to PATH*), **ODBC Driver 17 for S
 
 ## Known limits
 
-- The cloud queue (`agent_sync_queue`) is written but **no screen in the web app reads it yet**.
-- There is no billing / claim-reprocessing logic in this repo; it covers intake and Rx data entry only.
+- The web app's **Kroll inbox** shows synced prescriptions; the health card and DIN are not in `PendingNewRx`, so the pharmacist fills them in Verification before pushing.
+- There is **no billing / claim-reprocessing logic yet**: it needs the real columns of `Rx`, `RxPln`, `RxPlnAdj` and `RxWorkflow` (run `python flow.py --schema-report` and share `schema_report.txt`). Claims must never be written to Kroll's database directly; they are typed through Kroll's own screens with pharmacist approval.
 - Kroll table names and hotkeys are unverified against a real installation (steps 2.3 and 3.3).

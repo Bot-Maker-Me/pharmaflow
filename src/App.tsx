@@ -3,6 +3,7 @@ import { Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import Inbox from "@/pages/Inbox";
 import Index from "@/pages/Index";
 import Landing from "@/pages/Landing";
 import NotFound from "@/pages/NotFound";
@@ -24,6 +25,7 @@ export default function App() {
             <Route index element={<Index />} />
             <Route path="verify" element={<Verify />} />
             <Route path="verify/:scriptId" element={<Verify />} />
+            <Route path="inbox" element={<Inbox />} />
             <Route path="queue" element={<Queue />} />
             <Route path="settings" element={<Settings />} />
           </Route>

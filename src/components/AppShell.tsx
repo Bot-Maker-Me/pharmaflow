@@ -1,4 +1,4 @@
-import { Activity, Home, ListChecks, Pill, Settings2, ShieldCheck } from "lucide-react";
+import { Activity, Home, Inbox, ListChecks, Pill, Settings2, ShieldCheck } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { HelperStatus } from "@/components/HelperStatus";
@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { to: "/app", label: "Intake", icon: Home, end: true },
+  { to: "/app/inbox", label: "Kroll inbox", icon: Inbox, end: false },
   { to: "/app/verify", label: "Verification", icon: ShieldCheck, end: false },
   { to: "/app/queue", label: "Queue", icon: ListChecks, end: false },
   { to: "/app/settings", label: "Settings", icon: Settings2, end: false },
