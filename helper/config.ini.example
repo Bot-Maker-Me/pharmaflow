@@ -3,7 +3,7 @@
 ; LIVE   = also push to the cloud API
 MODE = SHADOW
 POLL_INTERVAL_SEC = 5
-AGENT_VERSION = 1.1.0
+AGENT_VERSION = 1.3.0
 ; Same name on every PC of this pharmacy (e.g. henderson). Prevents duplicate rows.
 STORE_ID = default
 ; NEW_ONLY = on the very first run ignore the old pending rows and only watch new ones.
@@ -24,7 +24,7 @@ DRIVER = ODBC Driver 17 for SQL Server
 TRUST_SERVER_CERTIFICATE = true
 
 [Cloud]
-; must be https://  (only needed in LIVE mode)
+; must be https://  (only needed when cloud is configured)
 API_URL = https://pharmaflow-swart.vercel.app/api/sync-queue
 API_KEY = CHANGE_ME_long_random_token
 ; Only if Vercel Deployment Protection blocks the API URL (see docs/SETUP.md)
@@ -100,3 +100,5 @@ rx_created = FillDate
 GO_LIVE_MIN_MATCH = 0.995
 GO_LIVE_MIN_SAMPLES = 200
 GO_LIVE_MIN_AUTO_RATE = 0.80
+; When agent plan differs from what staff typed in Kroll, POST corrections to /api/learn automatically.
+AUTO_LEARN = true
