@@ -1,10 +1,11 @@
 /**
  * /api/learn
  *
- * POST  (x-access-token)  record field corrections after a tech verifies a script
- * GET   (x-access-token)  return top learned mappings for client-side apply + few-shot hints
+ * POST  (x-access-token | x-api-key)  record field corrections
+ *       Sources: verification UI, or agent SHADOW compare (source=shadow_staff)
+ * GET   return top learned mappings for client-side apply + few-shot hints
  *
- * Auth: EXTRACT_ACCESS_TOKEN (same as /api/extract) so the browser can call it.
+ * Auth: EXTRACT_ACCESS_TOKEN or AGENT_API_KEY
  * Storage: Supabase service role. Missing Supabase → accept + return empty (no crash).
  */
 
@@ -65,7 +66,17 @@ function inferMappings(storeId, corrections) {
       }
     }
 
-    if ((path.endsWith(".drug_name") || path.endsWith(".strength") || path.endsWith(".sig")) && original) {
+    // SHADOW staff: wrong internal drug id → staff's drug id
+    if (path.endsWith(".drug_id") && original && corrected) {
+      out.push({
+        store_id: storeId,
+        kind: "drug_id_replace",
+        source_key: original.slice(0, 80),
+        target_value: corrected.slice(0, 80),
+      });
+    }
+
+    if ((path.endsWith(".drug_name") || path.endsWith(".strength") || path.endsWith(".sig") || path.endsWith(".qty") || path.endsWith(".refills")) && original) {
       out.push({
         store_id: storeId,
         kind: "text_replace",
@@ -88,8 +99,6 @@ function inferMappings(storeId, corrections) {
 
 async function upsertMappings(cfg, mappings) {
   if (!mappings.length) return;
-  // Prefer RPC-less: fetch existing hit_count then patch. Simple approach: post with ignore + separate increment via raw SQL not available.
-  // Use Prefer resolution=merge-duplicates if unique constraint — PostgREST upsert.
   await fetch(`${cfg.url}/rest/v1/learned_mappings?on_conflict=store_id,kind,source_key`, {
     method: "POST",
     headers: sbHeaders(cfg.key, {
@@ -104,7 +113,6 @@ async function upsertMappings(cfg, mappings) {
     ),
   });
 
-  // Increment hit_count for repeats (best-effort)
   for (const m of mappings) {
     const q = new URLSearchParams({
       store_id: `eq.${m.store_id}`,
@@ -173,6 +181,7 @@ export default async function handler(req, res) {
   const storeId = str(body.store_id || "default", 64) || "default";
   const scriptId = str(body.script_id, 80);
   const documentName = str(body.document_name, 200);
+  const source = str(body.source || "verify_ui", 40);
   const corrections = Array.isArray(body.corrections) ? body.corrections.slice(0, MAX_CORRECTIONS) : [];
   if (!corrections.length) return send(res, 400, { error: "corrections array required" });
 
@@ -184,7 +193,10 @@ export default async function handler(req, res) {
       field_path: str(c.field_path, 120),
       original_value: str(c.original_value, 400),
       corrected_value: str(c.corrected_value, 400),
-      context: c.context && typeof c.context === "object" ? c.context : {},
+      context: {
+        ...(c.context && typeof c.context === "object" ? c.context : {}),
+        source,
+      },
     }))
     .filter((r) => r.field_path && r.corrected_value && r.original_value !== r.corrected_value);
 
@@ -212,5 +224,5 @@ export default async function handler(req, res) {
     console.error("[learn] mapping upsert", err?.message || err);
   }
 
-  return send(res, 201, { ok: true, saved: rows.length, mappings: mappings.length, stored: true });
+  return send(res, 201, { ok: true, saved: rows.length, mappings: mappings.length, stored: true, source });
 }
