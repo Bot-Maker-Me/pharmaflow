@@ -1,7 +1,13 @@
 import * as React from "react";
 import { toast } from "sonner";
 
-import { enrichMedicationFromDin, resolveDinStatus } from "@/services/dpd";
+import { enrichMedicationFromDin } from "@/services/dpd";
+import {
+  diffScriptAgainstSnapshot,
+  refreshLearnedMappings,
+  snapshotFromScript,
+  submitCorrections,
+} from "@/services/learn";
 import { LocalHelperClient, type HelperInfo, type HelperStatus, type PushOutcome } from "@/services/agent";
 import { createSampleDocument, createSampleDocuments, uid } from "@/services/mockVision";
 import { countPdfPages } from "@/services/pdf";
@@ -125,6 +131,8 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
 
   const settingsRef = React.useRef(settings);
   settingsRef.current = settings;
+  const scriptsRef = React.useRef(scripts);
+  scriptsRef.current = scripts;
 
   const sampleCursor = React.useRef(0);
 
@@ -132,12 +140,10 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     const client = helperRef.current!;
     const unsubscribe = client.subscribe(setHelperStatus);
     let cancelled = false;
-
     const probe = async () => {
       const info = await client.check(settings.helperUrl);
       if (!cancelled) setHelperInfo(info);
     };
-
     probe();
     const timer = window.setInterval(probe, 10000);
     return () => {
@@ -157,9 +163,15 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     } catch {
-      /* storage unavailable — settings stay in memory */
+      /* ignore */
     }
   }, [settings]);
+
+  // Pull store-level learned mappings when token is available
+  React.useEffect(() => {
+    if (!settings.apiToken) return;
+    void refreshLearnedMappings(settings, "default");
+  }, [settings.apiToken, settings.apiBaseUrl]);
 
   const logActivity = React.useCallback((text: string, tone: ActivityEntry["tone"] = "info") => {
     setActivity((prev) =>
@@ -356,6 +368,23 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
 
   const verifyScript = React.useCallback(
     (scriptId: string) => {
+      const target = scriptsRef.current.find((script) => script.id === scriptId);
+      if (target) {
+        const corrections = diffScriptAgainstSnapshot(target, target.extractionSnapshot);
+        if (corrections.length) {
+          void submitCorrections(settingsRef.current, {
+            store_id: "default",
+            script_id: target.id,
+            document_name: target.documentName,
+            corrections,
+          }).then((result) => {
+            if (result.ok && (result.saved ?? 0) > 0) {
+              logActivity(`Learned ${result.saved} correction(s) from ${target.patient.full_name}`, "ok");
+            }
+          });
+        }
+      }
+
       setScripts((prev) =>
         prev.map((script) =>
           script.id === scriptId
@@ -363,11 +392,14 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
             : script,
         ),
       );
-      const target = scripts.find((script) => script.id === scriptId);
       logActivity(`Verified ${target ? target.patient.full_name : "prescription"}`, "ok");
-      toast.success("Prescription verified — ready to push");
+      toast.success(
+        target && diffScriptAgainstSnapshot(target, target.extractionSnapshot).length
+          ? "Verified — corrections saved for learning"
+          : "Prescription verified — ready to push",
+      );
     },
-    [logActivity, scripts],
+    [logActivity],
   );
 
   const pushScript = React.useCallback(
@@ -375,7 +407,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
       scriptId: string,
       onStep: (step: KeystrokeStep, index: number, total: number) => void,
     ): Promise<PushOutcome> => {
-      const script = scripts.find((candidate) => candidate.id === scriptId);
+      const script = scriptsRef.current.find((candidate) => candidate.id === scriptId);
       if (!script) {
         return {
           ok: false,
@@ -384,6 +416,17 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
           steps: [],
           requests: [],
         };
+      }
+
+      // Learn from any last-minute edits even if Verify was skipped
+      const corrections = diffScriptAgainstSnapshot(script, script.extractionSnapshot);
+      if (corrections.length) {
+        void submitCorrections(settingsRef.current, {
+          store_id: "default",
+          script_id: script.id,
+          document_name: script.documentName,
+          corrections,
+        });
       }
 
       const client = helperRef.current!;
@@ -420,7 +463,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
       if (!result.ok) toast.error(result.message);
       return result;
     },
-    [logActivity, scripts],
+    [logActivity],
   );
 
   const createManualScript = React.useCallback(
@@ -492,6 +535,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         status: "pending",
         dinVerifiedCount: enriched.din_status === "verified" ? 1 : 0,
       };
+      script.extractionSnapshot = snapshotFromScript(script);
       setDocuments((prev) => [document, ...prev]);
       setScripts((prev) => [script, ...prev]);
       logActivity(`Manually keyed a prescription for ${input.full_name}`, "info");
