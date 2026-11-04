@@ -57,11 +57,6 @@ export const LEVEL_STYLES: Record<ConfidenceLevel, LevelStyle> = {
   },
 };
 
-/**
- * Field-level colouring. A field is downgraded when the Vision AI was
- * confident but the supporting reference data (DIN / licence) could not be
- * verified — the technician still needs to eyeball it.
- */
 export function fieldLevel(
   score: number,
   opts: { verified?: boolean; requiresCheck?: boolean } = {},
@@ -76,16 +71,25 @@ export function medicationLevel(
   med: Medication,
   t: ConfidenceThresholds = DEFAULT_THRESHOLDS,
 ): ConfidenceLevel {
-  const requiresCheck = med.din_status === "unverified" || med.din_status === "invalid";
+  const requiresCheck =
+    med.din_status === "unverified" ||
+    med.din_status === "invalid" ||
+    !med.drug_name.trim() ||
+    !med.strength.trim();
   return fieldLevel(med.confidence, { verified: !requiresCheck, requiresCheck: med.is_compound }, t);
 }
 
 export function medicationIssues(med: Medication): string[] {
   const issues: string[] = [];
   if (med.is_compound) issues.push("Custom compound — no DIN on file");
-  if (med.din_status === "unverified") issues.push(`DIN ${med.din} not found in Health Canada DPD`);
+  if (!med.drug_name.trim()) issues.push("Drug name missing");
+  if (!med.strength.trim()) issues.push("Strength missing");
+  if (med.din_status === "unverified" && med.din)
+    issues.push(`DIN ${med.din} not found in Health Canada DPD extract`);
   if (med.din_status === "invalid") issues.push(`DIN ${med.din} fails the 8-digit check digit`);
   if (!med.din && !med.is_compound) issues.push("No DIN captured");
+  if (med.quantity <= 0) issues.push("Quantity missing or zero");
+  if (!med.sig.trim()) issues.push("Sig / directions missing");
   if (med.confidence < 0.7) issues.push("Low-confidence drug entry");
   return issues;
 }
@@ -94,10 +98,16 @@ export function scriptLevel(script: Script, t: ConfidenceThresholds = DEFAULT_TH
   if (script.illegible) return "low";
   let level = levelForScore(script.overallConfidence, t);
   const hasMedicationFlag = script.medications.some(
-    (m) => m.din_status === "unverified" || m.din_status === "invalid" || m.is_compound,
+    (m) =>
+      m.din_status === "unverified" ||
+      m.din_status === "invalid" ||
+      m.is_compound ||
+      !m.drug_name.trim() ||
+      !m.strength.trim(),
   );
   const missingLicence = !script.prescriber.license_number.trim();
-  if (level === "high" && (hasMedicationFlag || missingLicence)) level = "medium";
+  const missingHealthCard = !script.patient.health_card_num.trim();
+  if (level === "high" && (hasMedicationFlag || missingLicence || missingHealthCard)) level = "medium";
   return level;
 }
 
@@ -105,6 +115,8 @@ export function scriptIssues(script: Script): string[] {
   const issues: string[] = [...script.flags];
   if (script.illegible) issues.push("Illegible handwriting flagged by Vision AI");
   if (!script.prescriber.license_number.trim()) issues.push("Prescriber licence number missing");
+  if (!script.patient.health_card_num.trim()) issues.push("Health card / provincial ID missing");
+  if (!script.patient.full_name.trim()) issues.push("Patient name missing");
   if (script.patient.confidence < 0.7) issues.push("Patient identity below 70% confidence");
   script.medications.forEach((med) => {
     medicationIssues(med).forEach((issue) => issues.push(issue));
