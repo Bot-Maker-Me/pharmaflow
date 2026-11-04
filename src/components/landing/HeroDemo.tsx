@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { CheckCircle2, FileText, Loader2, ShieldCheck } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { useReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
 
@@ -15,12 +14,11 @@ const rows = [
   { label: "SIG", value: "1 tab PO BID", bar: "w-2/5" },
 ];
 
-// One tick = 750 ms. The demo loops: scan → extract → ready → push → done.
 const EXTRACT_FROM = 1;
-const READY_AT = rows.length + EXTRACT_FROM + 1; // 8
-const PUSHING_AT = READY_AT + 2; // 10
-const DONE_AT = PUSHING_AT + 1; // 11
-const LOOP_AT = DONE_AT + 4; // 15
+const READY_AT = rows.length + EXTRACT_FROM + 1;
+const PUSHING_AT = READY_AT + 2;
+const DONE_AT = PUSHING_AT + 1;
+const LOOP_AT = DONE_AT + 4;
 
 export function HeroDemo() {
   const reduced = useReducedMotion();
@@ -60,23 +58,24 @@ export function HeroDemo() {
   };
 
   return (
-    <div className="relative mx-auto mt-16 max-w-4xl">
-      <div className="absolute -inset-4 animate-gradient-pan rounded-2xl bg-gradient-to-r from-indigo-500/25 via-violet-500/15 to-cyan-500/25 bg-[length:200%_200%] blur-2xl motion-reduce:animate-none" />
+    <div className="relative mx-auto mt-4 max-w-5xl">
+      {/* Soft ambient glow */}
+      <div className="pointer-events-none absolute -inset-8 rounded-[2rem] bg-[radial-gradient(ellipse_at_center,rgba(26,61,64,0.35),transparent_70%)] blur-2xl" />
 
-      {/* Floating status chips */}
+      {/* Floating chips */}
       <div
         className={cn(
-          "pointer-events-none absolute -top-4 right-8 z-10 hidden items-center gap-2 rounded-full border border-emerald-400/30 bg-slate-900/90 px-3 py-1.5 text-xs font-medium text-emerald-300 shadow-lg backdrop-blur transition-all duration-500 lg:flex",
+          "pointer-events-none absolute -top-3 right-6 z-10 hidden items-center gap-2 rounded-full border border-emerald-500/30 bg-[#0E0E0E]/95 px-3 py-1.5 text-xs font-medium text-emerald-300 shadow-xl backdrop-blur transition-all duration-500 lg:flex",
           extracted >= 4 ? "translate-y-0 opacity-100" : "translate-y-3 opacity-0",
         )}
       >
         <span className="animate-float motion-reduce:animate-none">
           <ShieldCheck className="h-3.5 w-3.5" />
         </span>
-        DIN verified · Health Canada DPD
+        DIN verified · Health Canada
       </div>
       <div
-        className="pointer-events-none absolute -left-4 bottom-24 z-10 hidden animate-float items-center gap-2 rounded-full border border-indigo-400/30 bg-slate-900/90 px-3 py-1.5 text-xs font-medium text-indigo-200 shadow-lg backdrop-blur motion-reduce:animate-none lg:flex"
+        className="pointer-events-none absolute -left-2 bottom-20 z-10 hidden animate-float items-center gap-2 rounded-full border border-[#C45C26]/35 bg-[#0E0E0E]/95 px-3 py-1.5 text-xs font-medium text-[#E8A882] shadow-xl backdrop-blur motion-reduce:animate-none lg:flex"
         style={{ animationDelay: "1.2s" }}
       >
         <FileText className="h-3.5 w-3.5" />
@@ -88,18 +87,18 @@ export function HeroDemo() {
         onMouseMove={onMove}
         onMouseEnter={() => setPaused(true)}
         onMouseLeave={onLeave}
-        className="relative overflow-hidden rounded-2xl border border-white/10 bg-slate-900/80 shadow-2xl shadow-black/40 backdrop-blur transition-transform duration-200 ease-out"
+        className="relative overflow-hidden rounded-2xl border border-white/10 bg-[#111110] shadow-[0_40px_100px_-30px_rgba(0,0,0,0.7)] transition-transform duration-200 ease-out"
       >
         <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
           <div className="h-2.5 w-2.5 rounded-full bg-red-400/80" />
           <div className="h-2.5 w-2.5 rounded-full bg-amber-400/80" />
           <div className="h-2.5 w-2.5 rounded-full bg-emerald-400/80" />
-          <span className="ml-3 text-xs text-slate-400">Pharma Flow · Intake workspace</span>
-          <span className="ml-auto flex items-center gap-1.5 text-xs text-slate-400">
+          <span className="ml-3 text-xs text-white/40">Pharma Flow · Intake</span>
+          <span className="ml-auto flex items-center gap-1.5 text-xs text-white/45">
             <span
               className={cn(
                 "h-1.5 w-1.5 rounded-full transition-colors",
-                done ? "bg-emerald-400" : scanning ? "animate-pulse bg-indigo-400" : "bg-amber-400",
+                done ? "bg-emerald-400" : scanning ? "animate-pulse bg-[#C45C26]" : "bg-amber-400",
               )}
             />
             {done ? "Pushed to Kroll" : pushing ? "Typing into Kroll…" : scanning ? "Reading fax…" : "Ready to verify"}
@@ -107,11 +106,10 @@ export function HeroDemo() {
         </div>
 
         <div className="grid gap-0 md:grid-cols-5">
-          {/* Fax page */}
           <div className="border-r border-white/5 p-5 md:col-span-2">
-            <p className="text-xs font-medium uppercase tracking-wider text-slate-500">Document</p>
-            <div className="relative mt-3 aspect-[3/4] overflow-hidden rounded-lg bg-slate-200 p-4 shadow-inner">
-              <div className="mb-3 h-2 w-1/2 rounded bg-slate-400/60" />
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/35">Document</p>
+            <div className="relative mt-3 aspect-[3/4] overflow-hidden rounded-lg bg-[#E8E4DC] p-4 shadow-inner">
+              <div className="mb-3 h-2 w-1/2 rounded bg-[#0E0E0E]/15" />
               <div className="space-y-3">
                 {rows.map((row, i) => (
                   <div
@@ -119,31 +117,30 @@ export function HeroDemo() {
                     className={cn(
                       "rounded-md p-1.5 ring-2 transition-all duration-500",
                       i < extracted
-                        ? "bg-emerald-300/40 ring-emerald-500/70"
+                        ? "bg-emerald-400/30 ring-emerald-600/50"
                         : i === extracted && scanning
-                          ? "animate-pulse bg-indigo-300/40 ring-indigo-500/60"
+                          ? "animate-pulse bg-[#C45C26]/25 ring-[#C45C26]/50"
                           : "ring-transparent",
                     )}
                   >
-                    <div className="mb-1 h-1.5 w-1/6 rounded bg-slate-400/50" />
-                    <div className={cn("h-2.5 rounded bg-slate-500/60", row.bar)} />
+                    <div className="mb-1 h-1.5 w-1/6 rounded bg-[#0E0E0E]/15" />
+                    <div className={cn("h-2.5 rounded bg-[#0E0E0E]/25", row.bar)} />
                   </div>
                 ))}
               </div>
               <div className="mt-4 space-y-2">
-                <div className="h-1.5 w-full rounded bg-slate-300" />
-                <div className="h-1.5 w-5/6 rounded bg-slate-300" />
+                <div className="h-1.5 w-full rounded bg-[#0E0E0E]/10" />
+                <div className="h-1.5 w-5/6 rounded bg-[#0E0E0E]/10" />
               </div>
               {scanning && (
-                <div className="absolute inset-x-0 h-0.5 animate-scan-line bg-indigo-500 shadow-[0_0_14px_3px_rgba(99,102,241,0.7)]" />
+                <div className="absolute inset-x-0 h-0.5 animate-scan-line bg-[#C45C26] shadow-[0_0_16px_4px_rgba(196,92,38,0.55)]" />
               )}
             </div>
           </div>
 
-          {/* Extracted fields */}
           <div className="space-y-3 p-5 md:col-span-3">
             <div className="flex items-center justify-between">
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-500">Extracted fields</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/35">Extracted fields</p>
               <span
                 className={cn(
                   "rounded-full px-2.5 py-0.5 text-xs font-medium tabular-nums transition-colors duration-500",
@@ -166,12 +163,10 @@ export function HeroDemo() {
                     filled ? "border-emerald-400/20 bg-white/[0.05]" : "border-white/5 bg-white/[0.02]",
                   )}
                 >
-                  <span className="text-xs text-slate-400">{row.label}</span>
+                  <span className="text-xs text-white/40">{row.label}</span>
                   {filled ? (
                     <div className="flex items-center gap-2">
-                      <span key={`v-${i}-${tick < EXTRACT_FROM ? 0 : 1}`} className="animate-word-in text-sm font-medium text-slate-100">
-                        {row.value}
-                      </span>
+                      <span className="animate-word-in text-sm font-medium text-white">{row.value}</span>
                       <CheckCircle2 className="h-3.5 w-3.5 animate-pop-in text-emerald-400" />
                     </div>
                   ) : (
@@ -185,30 +180,31 @@ export function HeroDemo() {
               {ready && (
                 <span
                   aria-hidden
-                  className="absolute inset-x-0 bottom-0 top-1 animate-pulse-ring rounded-md bg-indigo-400/40 motion-reduce:animate-none"
+                  className="absolute inset-x-0 bottom-0 top-1 animate-pulse-ring rounded-md bg-[#C45C26]/35 motion-reduce:animate-none"
                 />
               )}
-              <Button
+              <button
+                type="button"
                 onClick={push}
                 disabled={!ready && !done && !pushing}
                 className={cn(
-                  "relative w-full transition-all duration-300",
+                  "relative flex h-11 w-full items-center justify-center gap-2 rounded-full text-[13px] font-semibold transition-all duration-300 disabled:opacity-60",
                   done
-                    ? "bg-emerald-500 hover:bg-emerald-500 disabled:opacity-100"
-                    : "bg-indigo-500 hover:bg-indigo-400 disabled:opacity-60",
+                    ? "bg-emerald-600 text-white"
+                    : "bg-[#C45C26] text-white hover:bg-[#A84C1F]",
                   ready && "hover:-translate-y-0.5",
                 )}
               >
-                {pushing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {done && <CheckCircle2 className="mr-2 h-4 w-4 animate-pop-in" />}
+                {pushing && <Loader2 className="h-4 w-4 animate-spin" />}
+                {done && <CheckCircle2 className="h-4 w-4 animate-pop-in" />}
                 {done ? "Sent to Kroll" : pushing ? "Typing into Kroll…" : "Push to Kroll"}
-              </Button>
+              </button>
             </div>
           </div>
         </div>
       </div>
-      <p className="mt-4 text-center text-xs text-slate-500">
-        Live demo · hover to pause, click “Push to Kroll” when it’s ready
+      <p className="mt-4 text-center text-xs text-[#0E0E0E]/45">
+        Live demo · hover to pause · click Push when ready
       </p>
     </div>
   );
