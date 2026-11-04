@@ -1,5 +1,6 @@
 import type { ProcessedDocument, Script, Settings } from "@/lib/types";
 import { enrichMedicationFromDin } from "./dpd";
+import { applyLearnedToMedication, snapshotFromScript } from "./learn";
 import { createSyntheticExtraction, uid } from "./mockVision";
 import { renderDocumentPages } from "./pageImages";
 
@@ -65,13 +66,13 @@ function mapWireScript(
   const medications = wire.medications.map((med) => {
     const isCompound = Boolean(med.is_compound);
     const confidence = med.confidence ?? 0.8;
-    const enriched = enrichMedicationFromDin({
+    let enriched = enrichMedicationFromDin({
       drug_name: med.drug_name ?? "",
       din: med.din ?? "",
       strength: med.strength ?? "",
       is_compound: isCompound,
     });
-    return {
+    const base = {
       id: uid("med"),
       drug_name: enriched.drug_name,
       din: enriched.din,
@@ -92,12 +93,13 @@ function mapWireScript(
         sig: confidence,
       },
     };
+    return applyLearnedToMedication(base);
   });
 
   const patientConfidence = wire.patient.confidence ?? 0.8;
   const prescriberConfidence = wire.prescriber.confidence ?? 0.8;
 
-  return {
+  const script: Script = {
     id: uid("rx"),
     documentId: document.id,
     documentName: document.name,
@@ -134,6 +136,9 @@ function mapWireScript(
     status: "pending",
     dinVerifiedCount: medications.filter((med) => med.din_status === "verified").length,
   };
+
+  script.extractionSnapshot = snapshotFromScript(script);
+  return script;
 }
 
 const PAGES_PER_REQUEST = 3;
@@ -143,7 +148,11 @@ export async function requestExtraction(
   settings: Settings,
 ): Promise<ExtractionOutcome> {
   if (settings.extractionMode !== "live") {
-    return { scripts: createSyntheticExtraction(document), source: "demo" };
+    const scripts = createSyntheticExtraction(document).map((s) => ({
+      ...s,
+      extractionSnapshot: s.extractionSnapshot ?? snapshotFromScript(s),
+    }));
+    return { scripts, source: "demo" };
   }
 
   try {
@@ -191,8 +200,12 @@ export async function requestExtraction(
 
     return { scripts, source: "live" };
   } catch (error) {
+    const scripts = createSyntheticExtraction(document).map((s) => ({
+      ...s,
+      extractionSnapshot: s.extractionSnapshot ?? snapshotFromScript(s),
+    }));
     return {
-      scripts: createSyntheticExtraction(document),
+      scripts,
       source: "demo",
       warning: `Live extraction unavailable (${(error as Error).message}). Showing DEMO data — do not use it for real patients.`,
     };
