@@ -56,6 +56,20 @@ export interface Prescriber {
   field_scores: Record<string, number>;
 }
 
+/** Frozen copy of values when the script first entered the queue (for learning). */
+export interface ExtractionSnapshot {
+  patient: { full_name: string; dob: string; health_card_num: string };
+  prescriber: { name: string; license_number: string };
+  medications: Array<{
+    drug_name: string;
+    din: string;
+    strength: string;
+    quantity: number;
+    refills: number;
+    sig: string;
+  }>;
+}
+
 export interface Script {
   id: string;
   documentId: string;
@@ -76,6 +90,8 @@ export interface Script {
   verifiedAt?: string;
   pushedAt?: string;
   pushedTo?: PmsId;
+  /** Original AI / intake values; used to learn when the tech corrects fields. */
+  extractionSnapshot?: ExtractionSnapshot;
 }
 
 export interface DocumentPage {
@@ -133,4 +149,3 @@ export const DEFAULT_SETTINGS: Settings = {
   mediumThreshold: 0.7,
   theme: "light",
 };
-
