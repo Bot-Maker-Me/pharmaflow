@@ -30,6 +30,9 @@ export type LearnedMapping = {
 
 const LOCAL_KEY = "pharmflow.learned.v1";
 
+/** Prefer mappings seen at least this many times (1 = apply on first confirmation). */
+const MIN_HITS_APPLY = 1;
+
 export function snapshotFromScript(script: Script): ExtractionSnapshot {
   return {
     patient: {
@@ -103,6 +106,16 @@ function saveLocalMappings(mappings: LearnedMapping[]) {
   }
 }
 
+function usable(m: LearnedMapping): boolean {
+  return (m.hit_count ?? 1) >= MIN_HITS_APPLY;
+}
+
+function normText(v: string): string {
+  return String(v ?? "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
 /** Merge server mappings into local cache (by kind+source_key). */
 export function mergeLearnedMappings(incoming: LearnedMapping[]) {
   const map = new Map<string, LearnedMapping>();
@@ -121,27 +134,149 @@ export function getLearnedMappings(): LearnedMapping[] {
   return loadLocalMappings();
 }
 
-/** Apply learned DIN → drug / strength when fields are still empty. */
-export function applyLearnedToMedication(med: Medication): Medication {
-  const mappings = loadLocalMappings();
+/**
+ * Auto-apply learned corrections to a medication from the latest extract.
+ * - din_to_drug / din_to_strength: fill empty, or overwrite when hits >= 2
+ * - text_replace: if model repeated the same wrong value, swap to staff correction
+ * - quantity / refills text_replace supported
+ */
+export function applyLearnedToMedication(med: Medication, mappings?: LearnedMapping[]): Medication {
+  const list = (mappings ?? loadLocalMappings()).filter(usable);
   const din = (med.din || "").replace(/\D/g, "");
-  if (din.length < 7) return med;
-  const key = din.length === 7 ? din.padStart(8, "0") : din.slice(-8);
+  const key8 = din.length === 7 ? din.padStart(8, "0") : din.length >= 8 ? din.slice(-8) : "";
   let next = { ...med };
-  for (const m of mappings) {
-    if (m.source_key !== key && m.source_key !== din) continue;
-    if (m.kind === "din_to_drug" && !next.drug_name.trim()) next.drug_name = m.target_value;
-    if (m.kind === "din_to_strength" && !next.strength.trim()) next.strength = m.target_value;
+  let applied = 0;
+
+  for (const m of list) {
+    if (m.kind === "din_to_drug" && key8 && (m.source_key === key8 || m.source_key === din)) {
+      if (!next.drug_name.trim() || (m.hit_count || 0) >= 2) {
+        if (next.drug_name !== m.target_value) {
+          next.drug_name = m.target_value;
+          applied += 1;
+        }
+      }
+    }
+    if (m.kind === "din_to_strength" && key8 && (m.source_key === key8 || m.source_key === din)) {
+      if (!next.strength.trim() || (m.hit_count || 0) >= 2) {
+        if (next.strength !== m.target_value) {
+          next.strength = m.target_value;
+          applied += 1;
+        }
+      }
+    }
   }
-  for (const m of mappings) {
+
+  for (const m of list) {
     if (m.kind !== "text_replace") continue;
-    const [path, original] = m.source_key.split("::");
-    if (!path || original == null) continue;
-    if (path.includes("drug_name") && next.drug_name === original) next.drug_name = m.target_value;
-    if (path.includes(".sig") && next.sig === original) next.sig = m.target_value;
-    if (path.includes("strength") && next.strength === original) next.strength = m.target_value;
+    const sep = m.source_key.indexOf("::");
+    if (sep < 0) continue;
+    const path = m.source_key.slice(0, sep);
+    const original = m.source_key.slice(sep + 2);
+    const o = normText(original);
+    if (!path || !o) continue;
+
+    if (path.includes("drug_name") && normText(next.drug_name) === o) {
+      next.drug_name = m.target_value;
+      applied += 1;
+    }
+    if ((path.includes(".sig") || path.endsWith("sig")) && normText(next.sig) === o) {
+      next.sig = m.target_value;
+      applied += 1;
+    }
+    if (path.includes("strength") && normText(next.strength) === o) {
+      next.strength = m.target_value;
+      applied += 1;
+    }
+    if (path.includes("quantity") || path.includes(".qty")) {
+      if (normText(String(next.quantity)) === o || String(next.quantity) === original) {
+        const n = Number(m.target_value);
+        if (Number.isFinite(n)) {
+          next.quantity = n;
+          applied += 1;
+        }
+      }
+    }
+    if (path.includes("refills")) {
+      if (normText(String(next.refills)) === o || String(next.refills) === original) {
+        const n = Number(m.target_value);
+        if (Number.isFinite(n)) {
+          next.refills = Math.trunc(n);
+          applied += 1;
+        }
+      }
+    }
+    if (path.includes(".din") && normText(next.din) === o) {
+      next.din = m.target_value.replace(/\D/g, "").slice(-8);
+      applied += 1;
+    }
+  }
+
+  if (applied > 0) {
+    next = {
+      ...next,
+      // Soft signal that learning touched this row (UI may ignore unknown keys)
+      field_scores: {
+        ...next.field_scores,
+        drug_name: next.field_scores?.drug_name ?? next.confidence,
+        din: next.field_scores?.din ?? next.confidence,
+        strength: next.field_scores?.strength ?? next.confidence,
+        quantity: next.field_scores?.quantity ?? next.confidence,
+        refills: next.field_scores?.refills ?? next.confidence,
+        sig: next.field_scores?.sig ?? next.confidence,
+      },
+    };
   }
   return next;
+}
+
+/** Apply patient / prescriber / med mappings to a full script after extract. */
+export function applyLearnedToScript(script: Script, mappings?: LearnedMapping[]): Script {
+  const list = (mappings ?? loadLocalMappings()).filter(usable);
+  let patient = { ...script.patient };
+  let prescriber = { ...script.prescriber };
+
+  for (const m of list) {
+    if (m.kind !== "text_replace") continue;
+    const sep = m.source_key.indexOf("::");
+    if (sep < 0) continue;
+    const path = m.source_key.slice(0, sep);
+    const original = normText(m.source_key.slice(sep + 2));
+    if (!path || !original) continue;
+
+    if (path.includes("patient.full_name") && normText(patient.full_name) === original) {
+      patient.full_name = m.target_value;
+    }
+    if (path.includes("patient.dob") && normText(patient.dob) === original) {
+      patient.dob = m.target_value;
+    }
+    if (path.includes("health_card") && normText(patient.health_card_num) === original) {
+      patient.health_card_num = m.target_value;
+    }
+    if (path.includes("prescriber.name") && normText(prescriber.name) === original) {
+      prescriber.name = m.target_value;
+    }
+    if (path.includes("license") && normText(prescriber.license_number) === original) {
+      prescriber.license_number = m.target_value;
+    }
+  }
+
+  for (const m of list) {
+    if (m.kind !== "health_card_example") continue;
+    if (!patient.health_card_num.trim() && m.target_value) {
+      // only fill when empty — example is weak signal
+      // skip auto-fill of health card from name alone to avoid wrong patient ID
+    }
+  }
+
+  const medications = script.medications.map((med) => applyLearnedToMedication(med, list));
+
+  return {
+    ...script,
+    patient,
+    prescriber,
+    medications,
+    dinVerifiedCount: medications.filter((med) => med.din_status === "verified").length,
+  };
 }
 
 export async function submitCorrections(
@@ -168,7 +303,6 @@ export async function submitCorrections(
     if (!resp.ok) return { ok: false };
     const data = (await resp.json()) as { saved?: number };
 
-    // Also stash locally so next session benefits even before GET
     const localAdds: LearnedMapping[] = [];
     for (const c of payload.corrections) {
       if (c.field_path.endsWith(".din") && c.context?.drug_name) {
@@ -206,7 +340,7 @@ export async function submitCorrections(
 export async function refreshLearnedMappings(settings: Settings, storeId = "default") {
   const base = (settings.apiBaseUrl || "").replace(/\/$/, "");
   try {
-    const resp = await fetch(`${base}/api/learn?store_id=${encodeURIComponent(storeId)}&limit=100`, {
+    const resp = await fetch(`${base}/api/learn?store_id=${encodeURIComponent(storeId)}&limit=120`, {
       headers: {
         ...(settings.apiToken ? { "x-access-token": settings.apiToken } : {}),
       },
