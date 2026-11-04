@@ -1,6 +1,12 @@
 import type { ProcessedDocument, Script, Settings } from "@/lib/types";
 import { enrichMedicationFromDin } from "./dpd";
-import { applyLearnedToMedication, snapshotFromScript } from "./learn";
+import {
+  applyLearnedToMedication,
+  applyLearnedToScript,
+  fewShotHintsFromMappings,
+  refreshLearnedMappings,
+  snapshotFromScript,
+} from "./learn";
 import { createSyntheticExtraction, uid } from "./mockVision";
 import { renderDocumentPages } from "./pageImages";
 
@@ -9,8 +15,8 @@ import { renderDocumentPages } from "./pageImages";
  *
  * Contract with the backend (`POST {apiBaseUrl}/api/extract`):
  *
- *   request  { file_name, page_count, page_images: string[] }   // data URLs
- *   response { scripts: VisionScript[], model }
+ *   request  { file_name, page_count, page_images: string[], store_id?, learn_hints? }
+ *   response { scripts: VisionScript[], model, learn_applied? }
  *
  * Demo mode short-circuits the network and uses the deterministic generator so
  * the intake/verify/push workflow is fully functional offline.
@@ -99,7 +105,7 @@ function mapWireScript(
   const patientConfidence = wire.patient.confidence ?? 0.8;
   const prescriberConfidence = wire.prescriber.confidence ?? 0.8;
 
-  const script: Script = {
+  let script: Script = {
     id: uid("rx"),
     documentId: document.id,
     documentName: document.name,
@@ -137,6 +143,8 @@ function mapWireScript(
     dinVerifiedCount: medications.filter((med) => med.din_status === "verified").length,
   };
 
+  // Second pass: patient/prescriber + any remaining med text_replace rules
+  script = applyLearnedToScript(script);
   script.extractionSnapshot = snapshotFromScript(script);
   return script;
 }
@@ -147,11 +155,28 @@ export async function requestExtraction(
   document: ProcessedDocument,
   settings: Settings,
 ): Promise<ExtractionOutcome> {
+  // Pull latest staff/shadow corrections so this extract benefits immediately.
+  const storeId =
+    (settings as { storeId?: string }).storeId ||
+    (settings as { store_id?: string }).store_id ||
+    "default";
+  try {
+    await refreshLearnedMappings(settings, storeId);
+  } catch {
+    /* offline / no token — local cache still applies */
+  }
+
   if (settings.extractionMode !== "live") {
-    const scripts = createSyntheticExtraction(document).map((s) => ({
-      ...s,
-      extractionSnapshot: s.extractionSnapshot ?? snapshotFromScript(s),
-    }));
+    const scripts = createSyntheticExtraction(document).map((s) => {
+      const withLearn = applyLearnedToScript({
+        ...s,
+        medications: s.medications.map((m) => applyLearnedToMedication(m)),
+      });
+      return {
+        ...withLearn,
+        extractionSnapshot: withLearn.extractionSnapshot ?? snapshotFromScript(withLearn),
+      };
+    });
     return { scripts, source: "demo" };
   }
 
@@ -159,6 +184,7 @@ export async function requestExtraction(
     const pageImages = await renderDocumentPages(document);
     const endpoint = `${settings.apiBaseUrl.replace(/\/$/, "")}/api/extract`;
     const wireScripts: VisionScript[] = [];
+    const hints = fewShotHintsFromMappings(10);
 
     for (let offset = 0; offset < pageImages.length; offset += PAGES_PER_REQUEST) {
       const batch = pageImages.slice(offset, offset + PAGES_PER_REQUEST);
@@ -172,6 +198,8 @@ export async function requestExtraction(
           file_name: document.name,
           page_count: document.pageCount,
           page_images: batch,
+          store_id: storeId,
+          learn_hints: hints,
         }),
       });
 
@@ -200,10 +228,16 @@ export async function requestExtraction(
 
     return { scripts, source: "live" };
   } catch (error) {
-    const scripts = createSyntheticExtraction(document).map((s) => ({
-      ...s,
-      extractionSnapshot: s.extractionSnapshot ?? snapshotFromScript(s),
-    }));
+    const scripts = createSyntheticExtraction(document).map((s) => {
+      const withLearn = applyLearnedToScript({
+        ...s,
+        medications: s.medications.map((m) => applyLearnedToMedication(m)),
+      });
+      return {
+        ...withLearn,
+        extractionSnapshot: withLearn.extractionSnapshot ?? snapshotFromScript(withLearn),
+      };
+    });
     return {
       scripts,
       source: "demo",
