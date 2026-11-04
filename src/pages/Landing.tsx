@@ -1,18 +1,21 @@
 import { useEffect, useState } from "react";
+import type { MouseEvent } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, Check } from "lucide-react";
+import { ArrowRight, Check, Clock, FileWarning, Keyboard } from "lucide-react";
 
+import { AnimatedNumber } from "@/components/landing/AnimatedNumber";
+import { HeroDemo } from "@/components/landing/HeroDemo";
+import { Marquee } from "@/components/landing/Marquee";
+import { Reveal } from "@/components/landing/Reveal";
+import { RotatingWord } from "@/components/landing/RotatingWord";
 import { cn } from "@/lib/utils";
 
 /**
- * High-contrast editorial landing — Stratum scale + Villa restraint.
- * Not plain paper. Not purple SaaS.
- *
- * Paper  #F4F1EA
- * Ink    #0E0E0E
- * Clay   #C45C26  (Stratum-style accent CTA)
- * Forest #1A3D40
- * Warm grey sections for rhythm
+ * Dynamic editorial landing.
+ * Palette (Japanese nature + clinical):
+ *   Deep teal #18353B · Forest #1A3D40 · Sage #6D8164
+ *   Clay #C45C26 · Paper #F3EFE6 · Ink #0C0C0C
+ * Motion: scroll reveal, rotating words, live demo loop, marquee, counters, cursor glow.
  */
 
 const nav = [
@@ -20,6 +23,18 @@ const nav = [
   { href: "#how", label: "How it works" },
   { href: "#safety", label: "Safety" },
   { href: "#pricing", label: "Pricing" },
+];
+
+const heroWords = ["faxes", "prescriptions", "handwriting", "DINs", "refills"];
+
+const worksWith = [
+  "Kroll",
+  "Propel Rx",
+  "WinRx",
+  "Health Canada DPD",
+  "Local Windows agent",
+  "Supabase · Canada Central",
+  "F3 / F5 / F7 keystrokes",
 ];
 
 const steps = [
@@ -84,28 +99,42 @@ export default function Landing() {
     return () => root.classList.remove("scroll-smooth");
   }, []);
 
+  const onHeroMove = (e: MouseEvent<HTMLElement>) => {
+    const el = e.currentTarget;
+    const rect = el.getBoundingClientRect();
+    el.style.setProperty("--mx", `${e.clientX - rect.left}px`);
+    el.style.setProperty("--my", `${e.clientY - rect.top}px`);
+  };
+
   return (
-    <div className="min-h-screen bg-[#F4F1EA] text-[#0E0E0E] antialiased selection:bg-[#C45C26]/20">
+    <div className="min-h-screen overflow-x-clip bg-[#F3EFE6] text-[#0C0C0C] antialiased selection:bg-[#C45C26]/25">
+      {/* Progress */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-x-0 top-0 z-[60] h-0.5 origin-left bg-gradient-to-r from-[#18353B] via-[#C45C26] to-[#6D8164]"
+        style={{ transform: "scaleX(var(--scroll, 0))" }}
+      />
+
       {/* Nav */}
       <header
         className={cn(
           "fixed inset-x-0 top-0 z-50 transition-all duration-300",
           scrolled
-            ? "border-b border-[#0E0E0E]/10 bg-[#F4F1EA]/95 backdrop-blur-md"
+            ? "border-b border-[#0C0C0C]/08 bg-[#F3EFE6]/92 backdrop-blur-xl"
             : "bg-transparent",
         )}
       >
         <div className="mx-auto flex h-16 max-w-[78rem] items-center justify-between px-5 sm:px-8">
-          <Link to="/" className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-[4px] bg-[#0E0E0E] text-[11px] font-bold tracking-[0.14em] text-[#F4F1EA]">
+          <Link to="/" className="group flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-[5px] bg-[#18353B] text-[11px] font-bold tracking-[0.14em] text-[#F3EFE6] transition group-hover:scale-105">
               PF
             </span>
             <span className="text-[15px] font-semibold tracking-[-0.02em]">Pharma Flow</span>
           </Link>
 
-          <nav className="hidden items-center gap-10 text-[13px] font-medium text-[#0E0E0E]/65 md:flex">
+          <nav className="hidden items-center gap-10 text-[13px] font-medium text-[#0C0C0C]/6 md:flex">
             {nav.map((item) => (
-              <a key={item.href} href={item.href} className="transition hover:text-[#0E0E0E]">
+              <a key={item.href} href={item.href} className="transition hover:text-[#0C0C0C]">
                 {item.label}
               </a>
             ))}
@@ -114,229 +143,229 @@ export default function Landing() {
           <div className="flex items-center gap-4">
             <Link
               to="/login"
-              className="hidden text-[13px] font-medium text-[#0E0E0E]/65 transition hover:text-[#0E0E0E] sm:inline"
+              className="hidden text-[13px] font-medium text-[#0C0C0C]/6 transition hover:text-[#0C0C0C] sm:inline"
             >
               Sign in
             </Link>
             <Link
               to="/login"
-              className="inline-flex h-10 items-center gap-2 rounded-full bg-[#0E0E0E] px-5 text-[13px] font-semibold text-[#F4F1EA] transition hover:bg-[#222]"
+              className="group inline-flex h-10 items-center gap-2 rounded-full bg-[#18353B] px-5 text-[13px] font-semibold text-[#F3EFE6] transition hover:bg-[#1A3D40]"
             >
               Start pilot
-              <ArrowRight className="h-3.5 w-3.5" />
+              <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
             </Link>
           </div>
         </div>
       </header>
 
-      {/* ── HERO — Stratum-scale type ── */}
-      <section className="relative overflow-hidden pt-28 pb-8 sm:pt-36 sm:pb-12">
-        <div className="mx-auto max-w-[78rem] px-5 sm:px-8">
-          <p className="text-[12px] font-semibold uppercase tracking-[0.24em] text-[#C45C26]">
-            Canadian independent pharmacies
-          </p>
+      {/* ── HERO ── */}
+      <section
+        onMouseMove={onHeroMove}
+        className="relative overflow-hidden pt-28 pb-10 sm:pt-36 sm:pb-16"
+      >
+        {/* Cursor + ambient orbs */}
+        <div className="pointer-events-none absolute inset-0">
+          <div
+            className="absolute inset-0 opacity-70"
+            style={{
+              background:
+                "radial-gradient(520px circle at var(--mx, 50%) var(--my, 28%), rgba(196,92,38,0.12), transparent 55%)",
+            }}
+          />
+          <div className="absolute -top-32 left-1/4 h-[420px] w-[420px] animate-float-slow rounded-full bg-[#18353B]/12 blur-[100px] motion-reduce:animate-none" />
+          <div
+            className="absolute top-40 right-0 h-72 w-72 animate-float-slow rounded-full bg-[#C45C26]/10 blur-[90px] motion-reduce:animate-none"
+            style={{ animationDelay: "-4s" }}
+          />
+          <div
+            className="absolute bottom-10 left-10 h-56 w-56 animate-float-slow rounded-full bg-[#6D8164]/15 blur-[80px] motion-reduce:animate-none"
+            style={{ animationDelay: "-8s" }}
+          />
+          {/* Decorative grid dots */}
+          <div
+            className="absolute inset-0 opacity-[0.35]"
+            style={{
+              backgroundImage: "radial-gradient(#0C0C0C22 1px, transparent 1px)",
+              backgroundSize: "28px 28px",
+              maskImage: "linear-gradient(to bottom, black 0%, transparent 70%)",
+            }}
+          />
+        </div>
 
-          <h1 className="mt-6 max-w-[18ch] text-[3.25rem] font-bold leading-[0.95] tracking-[-0.045em] text-[#0E0E0E] sm:text-[4.75rem] lg:text-[6rem]">
-            Stop typing.
-            <br />
-            <span className="text-[#0E0E0E]/35">Start verifying.</span>
-          </h1>
+        <div className="relative mx-auto max-w-[78rem] px-5 sm:px-8">
+          <Reveal>
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#18353B]/20 bg-[#18353B]/08 px-3.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#18353B]">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#6D8164] opacity-60 motion-reduce:animate-none" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-[#6D8164]" />
+              </span>
+              Canadian independents
+            </div>
+          </Reveal>
 
-          <div className="mt-10 flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
-            <p className="max-w-md text-[1.125rem] leading-relaxed text-[#0E0E0E]/65">
-              Pharma Flow turns faxed prescriptions into structured fields, lets staff confirm once,
-              then enters them into Kroll — reclaiming 6–8 hours of typing every day.
+          <Reveal delay={80}>
+            <h1 className="mt-7 max-w-[16ch] text-[3.1rem] font-bold leading-[0.98] tracking-[-0.04em] text-[#0C0C0C] sm:text-[4.5rem] lg:text-[5.75rem]">
+              Stop typing{" "}
+              <RotatingWord words={heroWords} className="text-[#C45C26]" />.
+              <span className="mt-1 block text-[#18353B]">Let the desk move faster.</span>
+            </h1>
+          </Reveal>
+
+          <Reveal delay={160}>
+            <p className="mt-7 max-w-xl text-[1.1rem] leading-relaxed text-[#0C0C0C]/6 sm:text-[1.2rem]">
+              Pharma Flow reads faxed prescriptions into structured fields, staff verify once, then
+              a local agent enters them into Kroll — reclaiming 6–8 hours of typing every day.
             </p>
-            <div className="flex flex-wrap items-center gap-3">
+          </Reveal>
+
+          <Reveal delay={240}>
+            <div className="mt-9 flex flex-wrap items-center gap-3">
               <Link
                 to="/login"
-                className="inline-flex h-12 items-center gap-2 rounded-full bg-[#C45C26] px-8 text-[14px] font-semibold text-white transition hover:bg-[#A84C1F]"
+                className="group inline-flex h-12 items-center gap-2 rounded-full bg-[#C45C26] px-8 text-[14px] font-semibold text-white shadow-lg shadow-[#C45C26]/25 transition hover:-translate-y-0.5 hover:bg-[#A84C1F] hover:shadow-xl"
               >
                 Start 14-day pilot
-                <ArrowRight className="h-4 w-4" />
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
               </Link>
               <a
                 href="#how"
-                className="inline-flex h-12 items-center rounded-full border border-[#0E0E0E]/2 px-6 text-[14px] font-semibold transition hover:border-[#0E0E0E]/5"
+                className="inline-flex h-12 items-center rounded-full border border-[#0C0C0C]/18 bg-white/50 px-6 text-[14px] font-semibold backdrop-blur transition hover:border-[#0C0C0C]/4 hover:bg-white"
               >
-                See the flow
+                Watch the flow
               </a>
             </div>
-          </div>
-        </div>
+            <p className="mt-4 text-[12px] tracking-wide text-[#0C0C0C]/4">
+              No card · One workstation · Delete anytime
+            </p>
+          </Reveal>
 
-        {/* Product stage — full width under hero copy */}
-        <div className="mx-auto mt-14 max-w-[78rem] px-5 sm:mt-20 sm:px-8">
-          <div className="overflow-hidden rounded-2xl border border-[#0E0E0E]/10 bg-[#0E0E0E] shadow-[0_40px_100px_-40px_rgba(14,14,14,0.55)]">
-            <div className="flex items-center justify-between border-b border-white/10 px-5 py-3">
-              <div className="flex items-center gap-2">
-                <span className="h-2.5 w-2.5 rounded-full bg-white/25" />
-                <span className="h-2.5 w-2.5 rounded-full bg-white/25" />
-                <span className="h-2.5 w-2.5 rounded-full bg-white/25" />
-                <span className="ml-3 text-[12px] text-white/45">Pharma Flow · Verification</span>
-              </div>
-              <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300">
-                Ready
-              </span>
+          <Reveal delay={320} variant="scale">
+            <div className="mt-14 sm:mt-16">
+              <HeroDemo />
             </div>
-            <div className="grid lg:grid-cols-2">
-              <div className="border-b border-white/10 bg-[#161616] p-6 sm:p-8 lg:border-b-0 lg:border-r">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/35">
-                  Source fax
-                </p>
-                <div className="mt-6 space-y-3 rounded-lg bg-[#1C1C1C] p-5 ring-1 ring-white/5">
-                  {[92, 78, 65, 88, 54, 72, 60].map((w, i) => (
-                    <div
-                      key={i}
-                      className="h-2.5 rounded-sm bg-white/[0.08]"
-                      style={{ width: `${w}%` }}
-                    />
-                  ))}
-                  <div className="mt-4 flex gap-2">
-                    <div className="h-16 flex-1 rounded bg-white/[0.04] ring-1 ring-white/5" />
-                    <div className="h-16 w-20 rounded bg-white/[0.04] ring-1 ring-white/5" />
-                  </div>
-                </div>
-              </div>
-              <div className="bg-[#111] p-6 sm:p-8">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/35">
-                  Extracted fields
-                </p>
-                <dl className="mt-6 space-y-0">
-                  {[
-                    ["Patient", "Eleanor Whitfield"],
-                    ["DOB", "1957-02-03"],
-                    ["Drug", "Apo-Metformin 500 mg"],
-                    ["DIN", "00226514"],
-                    ["Qty / Refills", "60 · 3"],
-                    ["SIG", "1 tab PO BID with food"],
-                  ].map(([k, v], i) => (
-                    <div
-                      key={k}
-                      className={cn(
-                        "flex items-baseline justify-between gap-4 py-3.5",
-                        i < 5 && "border-b border-white/[0.06]",
-                      )}
-                    >
-                      <dt className="text-[13px] text-white/40">{k}</dt>
-                      <dd className="text-right text-[14px] font-medium text-white">{v}</dd>
-                    </div>
-                  ))}
-                </dl>
-                <button
-                  type="button"
-                  className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-full bg-[#C45C26] text-[13px] font-semibold text-white"
-                >
-                  Push to Kroll
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
-          </div>
-          <p className="mt-4 text-center text-[12px] text-[#0E0E0E]/4">
-            Illustrative UI — no live patient data shown
-          </p>
+          </Reveal>
         </div>
       </section>
 
-      {/* Metrics — ink band */}
-      <section className="border-y border-[#0E0E0E] bg-[#0E0E0E] text-[#F4F1EA]">
+      {/* Marquee */}
+      <section className="border-y border-[#0C0C0C]/08 bg-[#18353B] py-5">
+        <Marquee items={worksWith} />
+      </section>
+
+      {/* Metrics */}
+      <section className="border-b border-[#0C0C0C]/08 bg-[#0C0C0C] text-[#F3EFE6]">
         <div className="mx-auto grid max-w-[78rem] grid-cols-2 gap-8 px-5 py-14 sm:grid-cols-4 sm:px-8 sm:py-16">
           {[
-            { v: "6–8h", l: "Saved per tech / day" },
-            { v: "2–3s", l: "Extraction time" },
-            { v: "100%", l: "Store isolation" },
-            { v: "$199", l: "CAD / store / month" },
-          ].map((s) => (
-            <div key={s.l}>
-              <p className="text-3xl font-bold tracking-tight sm:text-4xl">{s.v}</p>
-              <p className="mt-2 text-[13px] text-white/45">{s.l}</p>
-            </div>
+            { to: 8, prefix: "6–", suffix: "h", label: "Saved per tech / day" },
+            { to: 3, prefix: "2–", suffix: "s", label: "Extraction time" },
+            { to: 100, prefix: "", suffix: "%", label: "Store isolation" },
+            { to: 199, prefix: "$", suffix: "", label: "CAD / store / month" },
+          ].map((s, i) => (
+            <Reveal key={s.label} delay={i * 100}>
+              <p className="text-3xl font-bold tracking-tight sm:text-4xl">
+                <AnimatedNumber to={s.to} prefix={s.prefix} suffix={s.suffix} />
+              </p>
+              <p className="mt-2 text-[13px] text-white/45">{s.label}</p>
+            </Reveal>
           ))}
         </div>
       </section>
 
-      {/* Problem — big type */}
+      {/* Problem */}
       <section id="product" className="scroll-mt-24 py-24 sm:py-32">
         <div className="mx-auto max-w-[78rem] px-5 sm:px-8">
-          <p className="text-[12px] font-semibold uppercase tracking-[0.22em] text-[#C45C26]">
-            The bottleneck
-          </p>
-          <h2 className="mt-5 max-w-[16ch] text-[2.5rem] font-bold leading-[1.05] tracking-[-0.035em] sm:text-[3.5rem]">
-            Half the shift is still retyping the fax.
-          </h2>
-          <p className="mt-6 max-w-xl text-[1.1rem] leading-relaxed text-[#0E0E0E]/6">
-            Patient. Prescriber. DIN. Quantity. SIG. Over and over into 15-year-old Windows software.
-            Slow. Error-prone. Exhausting.
-          </p>
+          <Reveal>
+            <p className="text-[12px] font-semibold uppercase tracking-[0.22em] text-[#C45C26]">
+              The bottleneck
+            </p>
+            <h2 className="mt-5 max-w-[15ch] text-[2.4rem] font-bold leading-[1.05] tracking-[-0.035em] sm:text-[3.4rem]">
+              Half the shift is still retyping the fax.
+            </h2>
+          </Reveal>
 
-          <div className="mt-16 grid gap-4 sm:grid-cols-3">
+          <div className="mt-14 grid gap-5 sm:grid-cols-3">
             {[
               {
+                icon: Clock,
                 t: "Hours lost",
                 b: "Technicians burn most of the day on the same fields for every script.",
               },
               {
+                icon: FileWarning,
                 t: "Noisy pages",
                 b: "Handwriting, fax compression, and cover sheets force constant re-work.",
               },
               {
+                icon: Keyboard,
                 t: "Typing risk",
                 b: "Wrong DIN or patient ID is a safety issue — not a software quirk.",
               },
             ].map((card, i) => (
-              <div
-                key={card.t}
-                className={cn(
-                  "rounded-2xl p-8 sm:p-10",
-                  i === 1 ? "bg-[#0E0E0E] text-[#F4F1EA]" : "bg-white ring-1 ring-[#0E0E0E]/08",
-                )}
-              >
-                <p className="font-mono text-[12px] opacity-40">0{i + 1}</p>
-                <h3 className="mt-4 text-[1.25rem] font-bold tracking-tight">{card.t}</h3>
-                <p
+              <Reveal key={card.t} delay={i * 120}>
+                <div
                   className={cn(
-                    "mt-3 text-[14px] leading-relaxed",
-                    i === 1 ? "text-white/55" : "text-[#0E0E0E]/55",
+                    "group h-full rounded-2xl p-8 transition duration-300 hover:-translate-y-1 sm:p-9",
+                    i === 1
+                      ? "bg-[#18353B] text-[#F3EFE6] shadow-xl shadow-[#18353B]/25"
+                      : "bg-white ring-1 ring-[#0C0C0C]/08 hover:shadow-lg",
                   )}
                 >
-                  {card.b}
-                </p>
-              </div>
+                  <div
+                    className={cn(
+                      "flex h-11 w-11 items-center justify-center rounded-xl transition group-hover:scale-110",
+                      i === 1 ? "bg-white/10 text-[#E8A882]" : "bg-[#18353B]/08 text-[#18353B]",
+                    )}
+                  >
+                    <card.icon className="h-5 w-5" />
+                  </div>
+                  <h3 className="mt-5 text-[1.2rem] font-bold tracking-tight">{card.t}</h3>
+                  <p
+                    className={cn(
+                      "mt-3 text-[14px] leading-relaxed",
+                      i === 1 ? "text-white/55" : "text-[#0C0C0C]/55",
+                    )}
+                  >
+                    {card.b}
+                  </p>
+                </div>
+              </Reveal>
             ))}
           </div>
         </div>
       </section>
 
-      {/* How — numbered large */}
-      <section id="how" className="scroll-mt-24 bg-[#EBE7DE] py-24 sm:py-32">
+      {/* How */}
+      <section id="how" className="scroll-mt-24 bg-[#E8E3D8] py-24 sm:py-32">
         <div className="mx-auto max-w-[78rem] px-5 sm:px-8">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-            <div>
+            <Reveal>
               <p className="text-[12px] font-semibold uppercase tracking-[0.22em] text-[#C45C26]">
                 Process
               </p>
-              <h2 className="mt-4 text-[2.5rem] font-bold tracking-[-0.035em] sm:text-[3.25rem]">
+              <h2 className="mt-4 text-[2.4rem] font-bold tracking-[-0.035em] sm:text-[3.2rem]">
                 Fax in.
                 <br />
                 Kroll filled.
               </h2>
-            </div>
-            <p className="max-w-sm text-[15px] leading-relaxed text-[#0E0E0E]/55">
-              Four steps. One human check. No new workflow for your staff — just less keyboard time.
-            </p>
+            </Reveal>
+            <Reveal delay={100}>
+              <p className="max-w-sm text-[15px] leading-relaxed text-[#0C0C0C]/55">
+                Four steps. One human check. No new workflow — just less keyboard time.
+              </p>
+            </Reveal>
           </div>
 
-          <ol className="mt-16 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-            {steps.map((step) => (
-              <li
-                key={step.n}
-                className="rounded-2xl bg-[#F4F1EA] p-7 ring-1 ring-[#0E0E0E]/06"
-              >
-                <span className="text-[2rem] font-bold tracking-tight text-[#C45C26]">{step.n}</span>
-                <h3 className="mt-4 text-[1.1rem] font-bold tracking-tight">{step.title}</h3>
-                <p className="mt-2 text-[14px] leading-relaxed text-[#0E0E0E]/55">{step.body}</p>
-              </li>
+          <ol className="mt-16 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            {steps.map((step, i) => (
+              <Reveal key={step.n} delay={i * 100} as="li">
+                <div className="group h-full rounded-2xl bg-[#F3EFE6] p-7 ring-1 ring-[#0C0C0C]/06 transition hover:-translate-y-1 hover:shadow-md">
+                  <span className="text-[2.25rem] font-bold tracking-tight text-[#C45C26] transition group-hover:scale-105">
+                    {step.n}
+                  </span>
+                  <h3 className="mt-4 text-[1.1rem] font-bold tracking-tight">{step.title}</h3>
+                  <p className="mt-2 text-[14px] leading-relaxed text-[#0C0C0C]/55">{step.body}</p>
+                </div>
+              </Reveal>
             ))}
           </ol>
         </div>
@@ -346,42 +375,46 @@ export default function Landing() {
       <section id="safety" className="scroll-mt-24 py-24 sm:py-32">
         <div className="mx-auto max-w-[78rem] px-5 sm:px-8">
           <div className="grid gap-16 lg:grid-cols-[1fr_1.15fr] lg:gap-24">
-            <div>
+            <Reveal>
               <p className="text-[12px] font-semibold uppercase tracking-[0.22em] text-[#C45C26]">
                 Guardrails
               </p>
-              <h2 className="mt-4 text-[2.25rem] font-bold leading-[1.1] tracking-[-0.03em] sm:text-[2.75rem]">
+              <h2 className="mt-4 text-[2.2rem] font-bold leading-[1.1] tracking-[-0.03em] sm:text-[2.7rem]">
                 Outside clinical decisioning. By design.
               </h2>
-            </div>
+            </Reveal>
             <div className="space-y-0">
               {principles.map((p, i) => (
-                <div
-                  key={p.title}
-                  className={cn(
-                    "border-t border-[#0E0E0E]/12 py-8",
-                    i === principles.length - 1 && "border-b",
-                  )}
-                >
-                  <h3 className="text-[1.15rem] font-bold">{p.title}</h3>
-                  <p className="mt-2 max-w-lg text-[15px] leading-relaxed text-[#0E0E0E]/55">{p.body}</p>
-                </div>
+                <Reveal key={p.title} delay={i * 100}>
+                  <div
+                    className={cn(
+                      "border-t border-[#0C0C0C]/12 py-8",
+                      i === principles.length - 1 && "border-b",
+                    )}
+                  >
+                    <h3 className="text-[1.15rem] font-bold">{p.title}</h3>
+                    <p className="mt-2 max-w-lg text-[15px] leading-relaxed text-[#0C0C0C]/55">{p.body}</p>
+                  </div>
+                </Reveal>
               ))}
             </div>
           </div>
         </div>
       </section>
 
-      {/* Pricing — full dark */}
-      <section id="pricing" className="scroll-mt-24 bg-[#0E0E0E] py-24 text-[#F4F1EA] sm:py-32">
-        <div className="mx-auto max-w-[78rem] px-5 sm:px-8">
+      {/* Pricing */}
+      <section id="pricing" className="scroll-mt-24 relative overflow-hidden bg-[#0C0C0C] py-24 text-[#F3EFE6] sm:py-32">
+        <div className="pointer-events-none absolute -right-20 top-0 h-80 w-80 rounded-full bg-[#C45C26]/15 blur-[100px]" />
+        <div className="pointer-events-none absolute -left-16 bottom-0 h-64 w-64 rounded-full bg-[#18353B]/40 blur-[80px]" />
+
+        <div className="relative mx-auto max-w-[78rem] px-5 sm:px-8">
           <div className="grid gap-14 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
-            <div>
+            <Reveal>
               <p className="text-[12px] font-semibold uppercase tracking-[0.22em] text-[#C45C26]">
                 Pricing
               </p>
               <h2 className="mt-4 text-[3.5rem] font-bold tracking-[-0.04em] sm:text-[5rem]">
-                $199
+                <AnimatedNumber to={199} prefix="$" />
               </h2>
               <p className="mt-1 text-[1.1rem] text-white/45">CAD per store / month</p>
               <p className="mt-6 max-w-md text-[15px] leading-relaxed text-white/55">
@@ -389,66 +422,70 @@ export default function Landing() {
               </p>
               <Link
                 to="/login"
-                className="mt-10 inline-flex h-12 items-center gap-2 rounded-full bg-[#C45C26] px-8 text-[14px] font-semibold text-white transition hover:bg-[#A84C1F]"
+                className="mt-10 inline-flex h-12 items-center gap-2 rounded-full bg-[#C45C26] px-8 text-[14px] font-semibold text-white transition hover:-translate-y-0.5 hover:bg-[#A84C1F]"
               >
                 Start free pilot
                 <ArrowRight className="h-4 w-4" />
               </Link>
-            </div>
-            <ul className="space-y-1 rounded-2xl border border-white/10 bg-white/[0.03] p-2">
-              {pricingLines.map((line) => (
-                <li
-                  key={line}
-                  className="flex items-center gap-3 rounded-xl px-5 py-4 text-[14px] text-white/80"
-                >
-                  <Check className="h-4 w-4 shrink-0 text-[#C45C26]" />
-                  {line}
-                </li>
-              ))}
-            </ul>
+            </Reveal>
+            <Reveal delay={120} variant="left">
+              <ul className="space-y-1 rounded-2xl border border-white/10 bg-white/[0.03] p-2 backdrop-blur">
+                {pricingLines.map((line) => (
+                  <li
+                    key={line}
+                    className="flex items-center gap-3 rounded-xl px-5 py-4 text-[14px] text-white/80 transition hover:bg-white/[0.04]"
+                  >
+                    <Check className="h-4 w-4 shrink-0 text-[#C45C26]" />
+                    {line}
+                  </li>
+                ))}
+              </ul>
+            </Reveal>
           </div>
         </div>
       </section>
 
-      {/* Final CTA band */}
-      <section className="border-t border-[#0E0E0E]/1 bg-[#F4F1EA] py-20 sm:py-24">
+      {/* Final CTA */}
+      <section className="border-t border-[#0C0C0C]/08 bg-[#F3EFE6] py-20 sm:py-24">
         <div className="mx-auto max-w-[78rem] px-5 text-center sm:px-8">
-          <h2 className="text-[2.25rem] font-bold tracking-[-0.03em] sm:text-[3rem]">
-            Give the keyboard back to the pharmacy.
-          </h2>
-          <p className="mx-auto mt-4 max-w-lg text-[15px] text-[#0E0E0E]/55">
-            14 days on one workstation. No card. Delete anytime.
-          </p>
-          <Link
-            to="/login"
-            className="mt-8 inline-flex h-12 items-center gap-2 rounded-full bg-[#0E0E0E] px-8 text-[14px] font-semibold text-[#F4F1EA] transition hover:bg-[#222]"
-          >
-            Start the pilot
-            <ArrowRight className="h-4 w-4" />
-          </Link>
+          <Reveal>
+            <h2 className="text-[2.2rem] font-bold tracking-[-0.03em] sm:text-[3rem]">
+              Give the keyboard back to the pharmacy.
+            </h2>
+            <p className="mx-auto mt-4 max-w-lg text-[15px] text-[#0C0C0C]/55">
+              14 days on one workstation. No card. Delete anytime.
+            </p>
+            <Link
+              to="/login"
+              className="mt-8 inline-flex h-12 items-center gap-2 rounded-full bg-[#18353B] px-8 text-[14px] font-semibold text-[#F3EFE6] transition hover:-translate-y-0.5 hover:bg-[#1A3D40]"
+            >
+              Start the pilot
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </Reveal>
         </div>
       </section>
 
-      <footer className="border-t border-[#0E0E0E]/1 bg-[#EBE7DE]">
+      <footer className="border-t border-[#0C0C0C]/08 bg-[#E8E3D8]">
         <div className="mx-auto flex max-w-[78rem] flex-col gap-6 px-5 py-10 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <div className="flex items-center gap-3">
-            <span className="flex h-8 w-8 items-center justify-center rounded-[4px] bg-[#0E0E0E] text-[10px] font-bold tracking-[0.12em] text-[#F4F1EA]">
+            <span className="flex h-8 w-8 items-center justify-center rounded-[4px] bg-[#18353B] text-[10px] font-bold tracking-[0.12em] text-[#F3EFE6]">
               PF
             </span>
-            <span className="text-[13px] font-medium text-[#0E0E0E]/6">Pharma Flow</span>
+            <span className="text-[13px] font-medium text-[#0C0C0C]/55">Pharma Flow</span>
           </div>
-          <div className="flex flex-wrap gap-6 text-[13px] text-[#0E0E0E]/5">
-            <Link to="/login" className="hover:text-[#0E0E0E]">
+          <div className="flex flex-wrap gap-6 text-[13px] text-[#0C0C0C]/45">
+            <Link to="/login" className="hover:text-[#0C0C0C]">
               Sign in
             </Link>
-            <a href="#safety" className="hover:text-[#0E0E0E]">
+            <a href="#safety" className="hover:text-[#0C0C0C]">
               Safety
             </a>
-            <a href="#pricing" className="hover:text-[#0E0E0E]">
+            <a href="#pricing" className="hover:text-[#0C0C0C]">
               Pricing
             </a>
           </div>
-          <p className="text-[12px] text-[#0E0E0E]/35">© {new Date().getFullYear()} Pharma Flow</p>
+          <p className="text-[12px] text-[#0C0C0C]/35">© {new Date().getFullYear()} Pharma Flow</p>
         </div>
       </footer>
     </div>
