@@ -9,7 +9,7 @@ import {
   submitCorrections,
 } from "@/services/learn";
 import { LocalHelperClient, type HelperInfo, type HelperStatus, type PushOutcome } from "@/services/agent";
-import { createSampleDocument, createSampleDocuments, uid } from "@/services/mockVision";
+import { createSampleDocument, uid } from "@/services/mockVision";
 import { countPdfPages } from "@/services/pdf";
 import { requestExtraction } from "@/services/vision";
 import type { KeystrokeStep } from "@/lib/pms";
@@ -106,9 +106,8 @@ function loadSettings(): Settings {
 }
 
 export function AppStoreProvider({ children }: { children: React.ReactNode }) {
-  const seeded = React.useMemo(() => createSampleDocuments(), []);
-  const [documents, setDocuments] = React.useState<ProcessedDocument[]>(seeded.documents);
-  const [scripts, setScripts] = React.useState<Script[]>(seeded.scripts);
+  const [documents, setDocuments] = React.useState<ProcessedDocument[]>([]);
+  const [scripts, setScripts] = React.useState<Script[]>([]);
   const [settings, setSettings] = React.useState<Settings>(loadSettings);
   const [pipeline, setPipeline] = React.useState<PipelineState>({
     active: false,
@@ -119,10 +118,10 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   const [helperInfo, setHelperInfo] = React.useState<HelperInfo>({});
   const [activity, setActivity] = React.useState<ActivityEntry[]>([
     {
-      id: "seed",
+      id: "boot",
       at: new Date().toISOString(),
-      text: `Ingested ${seeded.documents.length} faxed documents (${seeded.scripts.length} prescriptions)`,
-      tone: "ok",
+      text: "Queue empty — upload a fax or wait for the Kroll agent",
+      tone: "info",
     },
   ]);
 
@@ -167,7 +166,6 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [settings]);
 
-  // Pull store-level learned mappings when token is available
   React.useEffect(() => {
     if (!settings.apiToken) return;
     void refreshLearnedMappings(settings, "default");
@@ -262,8 +260,8 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     sampleCursor.current += 1;
     setDocuments((prev) => [built.document, ...prev]);
     setScripts((prev) => [...built.scripts, ...prev]);
-    logActivity(`Loaded sample fax ${built.document.name}`, "info");
-    toast.success(`Loaded ${built.document.name} (${built.document.pageCount} pages)`);
+    logActivity(`Loaded sample fax ${built.document.name} (demo only)`, "warn");
+    toast.message("Sample fax loaded — demo data only");
   }, [logActivity]);
 
   const updateScript = React.useCallback((scriptId: string, patch: Partial<Script>) => {
@@ -418,7 +416,6 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         };
       }
 
-      // Learn from any last-minute edits even if Verify was skipped
       const corrections = diffScriptAgainstSnapshot(script, script.extractionSnapshot);
       if (corrections.length) {
         void submitCorrections(settingsRef.current, {
@@ -553,11 +550,10 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const resetQueue = React.useCallback(() => {
-    const fresh = createSampleDocuments();
-    setDocuments(fresh.documents);
-    setScripts(fresh.scripts);
-    logActivity("Queue reset to the seeded demo batch", "info");
-    toast.success("Queue reset");
+    setDocuments([]);
+    setScripts([]);
+    logActivity("Queue cleared", "info");
+    toast.success("Queue cleared");
   }, [logActivity]);
 
   const stats = React.useMemo(() => {
