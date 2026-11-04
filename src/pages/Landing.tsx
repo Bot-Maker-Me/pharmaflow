@@ -5,15 +5,14 @@ import { ArrowRight, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
- * Editorial / Japanese-minimal marketing page.
- * Palette (colour theory + references):
- *   Paper   #F6F4EF  — warm off-white (ma / negative space)
- *   Ink     #1C1C1C  — near-black for type
- *   Charcoal #2A2A2A
- *   Silver  #C8C4BC  — hairlines
- *   Forest  #1F4A4D  — primary accent (trust, clinical)
- *   Clay    #A63737  — rare emphasis only
- * Composition: ~1.618 vertical rhythm, asymmetric hero, restrained motion.
+ * High-contrast editorial landing — Stratum scale + Villa restraint.
+ * Not plain paper. Not purple SaaS.
+ *
+ * Paper  #F4F1EA
+ * Ink    #0E0E0E
+ * Clay   #C45C26  (Stratum-style accent CTA)
+ * Forest #1A3D40
+ * Warm grey sections for rhythm
  */
 
 const nav = [
@@ -26,38 +25,38 @@ const nav = [
 const steps = [
   {
     n: "01",
-    title: "Receive the fax",
-    body: "Upload a multi-page PDF or photo. Cover sheets are detected and split without staff intervention.",
+    title: "Drop the fax",
+    body: "Multi-page PDF or photo. Cover sheets split automatically.",
   },
   {
     n: "02",
-    title: "Extract structured fields",
-    body: "Patient, prescriber, DIN, quantity, and SIG are read into a review form in a few seconds.",
+    title: "Fields fill in",
+    body: "Patient, doctor, DIN, qty, SIG — structured in seconds.",
   },
   {
     n: "03",
     title: "Verify once",
-    body: "Side-by-side document and data. Confidence cues and Health Canada DIN checks before anything leaves the desk.",
+    body: "Side-by-side review. DIN checked against Health Canada.",
   },
   {
     n: "04",
-    title: "Push into Kroll",
-    body: "A local Windows helper types into Kroll, Propel Rx, or WinRx the same way a technician would — F3, F5, F7.",
+    title: "Push to Kroll",
+    body: "Local agent types F3 / F5 / F7. Same workflow, less typing.",
   },
 ];
 
 const principles = [
   {
-    title: "Less typing. Same clinical control.",
-    body: "Pharma Flow never runs DUR, allergy, or interaction checks. Those stay inside your pharmacy system.",
+    title: "Clinical engines stay in Kroll",
+    body: "No DUR. No allergy engine. No interaction checks. Pharma Flow only moves intake data.",
   },
   {
-    title: "One store. One tenancy.",
-    body: "Each pharmacy is isolated. Queues, learnings, and agent data do not mix — even for the same DIN.",
+    title: "One pharmacy. Zero bleed.",
+    body: "Row-level isolation. Your queue, learnings, and agent keys never mix with another store.",
   },
   {
-    title: "Canada-first infrastructure.",
-    body: "Designed for independent and banner stores. Data region options include Canada Central.",
+    title: "Built for Canadian independents",
+    body: "Kroll, Propel Rx, WinRx. Banner and community stores. Canada-central data options.",
   },
 ];
 
@@ -66,14 +65,14 @@ const pricingLines = [
   "Extraction + DIN verification",
   "Kroll · Propel Rx · WinRx profiles",
   "Local Windows agent",
-  "14-day pilot, no card required",
+  "14-day pilot — no card",
 ];
 
 export default function Landing() {
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 12);
+    const onScroll = () => setScrolled(window.scrollY > 16);
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
@@ -86,52 +85,42 @@ export default function Landing() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-[#F6F4EF] text-[#1C1C1C] antialiased selection:bg-[#1F4A4D]/15">
-      {/* Thin progress — charcoal, not rainbow */}
-      <div
-        aria-hidden
-        className="pointer-events-none fixed inset-x-0 top-0 z-[60] h-px bg-[#1C1C1C]/10"
-      />
-
+    <div className="min-h-screen bg-[#F4F1EA] text-[#0E0E0E] antialiased selection:bg-[#C45C26]/20">
       {/* Nav */}
       <header
         className={cn(
-          "fixed inset-x-0 top-0 z-50 transition-colors duration-300",
+          "fixed inset-x-0 top-0 z-50 transition-all duration-300",
           scrolled
-            ? "border-b border-[#1C1C1C]/08 bg-[#F6F4EF]/92 backdrop-blur-md"
+            ? "border-b border-[#0E0E0E]/10 bg-[#F4F1EA]/95 backdrop-blur-md"
             : "bg-transparent",
         )}
       >
-        <div className="mx-auto flex h-[4.25rem] max-w-[72rem] items-center justify-between px-5 sm:px-8">
+        <div className="mx-auto flex h-16 max-w-[78rem] items-center justify-between px-5 sm:px-8">
           <Link to="/" className="flex items-center gap-3">
-            <span className="flex h-8 w-8 items-center justify-center rounded-sm bg-[#1C1C1C] text-[11px] font-semibold tracking-[0.12em] text-[#F6F4EF]">
+            <span className="flex h-9 w-9 items-center justify-center rounded-[4px] bg-[#0E0E0E] text-[11px] font-bold tracking-[0.14em] text-[#F4F1EA]">
               PF
             </span>
-            <span className="text-[15px] font-medium tracking-[-0.01em]">Pharma Flow</span>
+            <span className="text-[15px] font-semibold tracking-[-0.02em]">Pharma Flow</span>
           </Link>
 
-          <nav className="hidden items-center gap-9 text-[13px] text-[#1C1C1C]/70 md:flex">
+          <nav className="hidden items-center gap-10 text-[13px] font-medium text-[#0E0E0E]/65 md:flex">
             {nav.map((item) => (
-              <a
-                key={item.href}
-                href={item.href}
-                className="transition-colors hover:text-[#1C1C1C]"
-              >
+              <a key={item.href} href={item.href} className="transition hover:text-[#0E0E0E]">
                 {item.label}
               </a>
             ))}
           </nav>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-4">
             <Link
               to="/login"
-              className="hidden text-[13px] text-[#1C1C1C]/70 transition hover:text-[#1C1C1C] sm:inline"
+              className="hidden text-[13px] font-medium text-[#0E0E0E]/65 transition hover:text-[#0E0E0E] sm:inline"
             >
               Sign in
             </Link>
             <Link
               to="/login"
-              className="inline-flex h-10 items-center gap-2 rounded-full bg-[#1C1C1C] px-5 text-[13px] font-medium text-[#F6F4EF] transition hover:bg-[#2A2A2A]"
+              className="inline-flex h-10 items-center gap-2 rounded-full bg-[#0E0E0E] px-5 text-[13px] font-semibold text-[#F4F1EA] transition hover:bg-[#222]"
             >
               Start pilot
               <ArrowRight className="h-3.5 w-3.5" />
@@ -140,198 +129,242 @@ export default function Landing() {
         </div>
       </header>
 
-      {/* Hero — golden-ish split: type dominant left, product frame right on lg */}
-      <section className="relative pt-[7.5rem] pb-16 sm:pt-[9rem] sm:pb-24">
-        <div className="mx-auto grid max-w-[72rem] items-end gap-12 px-5 sm:px-8 lg:grid-cols-[1.2fr_0.8fr] lg:gap-16">
-          <div className="max-w-xl">
-            <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[#1F4A4D]">
-              Independent Canadian pharmacies
+      {/* ── HERO — Stratum-scale type ── */}
+      <section className="relative overflow-hidden pt-28 pb-8 sm:pt-36 sm:pb-12">
+        <div className="mx-auto max-w-[78rem] px-5 sm:px-8">
+          <p className="text-[12px] font-semibold uppercase tracking-[0.24em] text-[#C45C26]">
+            Canadian independent pharmacies
+          </p>
+
+          <h1 className="mt-6 max-w-[18ch] text-[3.25rem] font-bold leading-[0.95] tracking-[-0.045em] text-[#0E0E0E] sm:text-[4.75rem] lg:text-[6rem]">
+            Stop typing.
+            <br />
+            <span className="text-[#0E0E0E]/35">Start verifying.</span>
+          </h1>
+
+          <div className="mt-10 flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
+            <p className="max-w-md text-[1.125rem] leading-relaxed text-[#0E0E0E]/65">
+              Pharma Flow turns faxed prescriptions into structured fields, lets staff confirm once,
+              then enters them into Kroll — reclaiming 6–8 hours of typing every day.
             </p>
-            <h1 className="mt-5 text-[2.65rem] font-semibold leading-[1.05] tracking-[-0.035em] text-[#1C1C1C] sm:text-[3.5rem] lg:text-[4rem]">
-              Stop retyping
-              <br />
-              the fax.
-            </h1>
-            <p className="mt-6 max-w-[34rem] text-[1.05rem] leading-relaxed text-[#1C1C1C]/65 sm:text-[1.125rem]">
-              Pharma Flow reads prescriptions into structured fields, lets your team verify
-              once, then enters them into Kroll — so technicians keep their shift for patients,
-              not keyboards.
-            </p>
-            <div className="mt-9 flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <Link
                 to="/login"
-                className="inline-flex h-12 items-center gap-2 rounded-full bg-[#1F4A4D] px-7 text-[14px] font-medium text-[#F6F4EF] transition hover:bg-[#183741]"
+                className="inline-flex h-12 items-center gap-2 rounded-full bg-[#C45C26] px-8 text-[14px] font-semibold text-white transition hover:bg-[#A84C1F]"
               >
                 Start 14-day pilot
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <a
                 href="#how"
-                className="inline-flex h-12 items-center rounded-full border border-[#1C1C1C]/15 bg-transparent px-6 text-[14px] font-medium text-[#1C1C1C] transition hover:border-[#1C1C1C]/35"
+                className="inline-flex h-12 items-center rounded-full border border-[#0E0E0E]/2 px-6 text-[14px] font-semibold transition hover:border-[#0E0E0E]/5"
               >
-                How it works
+                See the flow
               </a>
             </div>
-            <p className="mt-5 text-[12px] tracking-wide text-[#1C1C1C]/45">
-              No card · One workstation · Delete anytime
-            </p>
           </div>
+        </div>
 
-          {/* Product frame — quiet, not neon */}
-          <div className="relative">
-            <div className="overflow-hidden rounded-2xl border border-[#1C1C1C]/10 bg-white shadow-[0_24px_80px_-32px_rgba(28,28,28,0.35)]">
-              <div className="flex items-center gap-2 border-b border-[#1C1C1C]/08 px-4 py-3">
-                <span className="h-2.5 w-2.5 rounded-full bg-[#C8C4BC]" />
-                <span className="h-2.5 w-2.5 rounded-full bg-[#C8C4BC]" />
-                <span className="h-2.5 w-2.5 rounded-full bg-[#C8C4BC]" />
-                <span className="ml-2 text-[11px] text-[#1C1C1C]/40">Verification</span>
+        {/* Product stage — full width under hero copy */}
+        <div className="mx-auto mt-14 max-w-[78rem] px-5 sm:mt-20 sm:px-8">
+          <div className="overflow-hidden rounded-2xl border border-[#0E0E0E]/10 bg-[#0E0E0E] shadow-[0_40px_100px_-40px_rgba(14,14,14,0.55)]">
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-3">
+              <div className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-white/25" />
+                <span className="h-2.5 w-2.5 rounded-full bg-white/25" />
+                <span className="h-2.5 w-2.5 rounded-full bg-white/25" />
+                <span className="ml-3 text-[12px] text-white/45">Pharma Flow · Verification</span>
               </div>
-              <div className="grid gap-0 sm:grid-cols-2">
-                <div className="border-b border-[#1C1C1C]/06 bg-[#F0EEE8] p-5 sm:border-b-0 sm:border-r">
-                  <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-[#1C1C1C]/40">
-                    Document
-                  </p>
-                  <div className="mt-4 space-y-2.5">
-                    {[88, 72, 64, 80, 56, 70].map((w, i) => (
-                      <div
-                        key={i}
-                        className="h-2.5 rounded-sm bg-[#1C1C1C]/08"
-                        style={{ width: `${w}%` }}
-                      />
-                    ))}
+              <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300">
+                Ready
+              </span>
+            </div>
+            <div className="grid lg:grid-cols-2">
+              <div className="border-b border-white/10 bg-[#161616] p-6 sm:p-8 lg:border-b-0 lg:border-r">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/35">
+                  Source fax
+                </p>
+                <div className="mt-6 space-y-3 rounded-lg bg-[#1C1C1C] p-5 ring-1 ring-white/5">
+                  {[92, 78, 65, 88, 54, 72, 60].map((w, i) => (
+                    <div
+                      key={i}
+                      className="h-2.5 rounded-sm bg-white/[0.08]"
+                      style={{ width: `${w}%` }}
+                    />
+                  ))}
+                  <div className="mt-4 flex gap-2">
+                    <div className="h-16 flex-1 rounded bg-white/[0.04] ring-1 ring-white/5" />
+                    <div className="h-16 w-20 rounded bg-white/[0.04] ring-1 ring-white/5" />
                   </div>
                 </div>
-                <div className="p-5">
-                  <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-[#1C1C1C]/40">
-                    Fields
-                  </p>
-                  <dl className="mt-4 space-y-3 text-[13px]">
-                    {[
-                      ["Patient", "Eleanor Whitfield"],
-                      ["DOB", "1957-02-03"],
-                      ["Drug", "Apo-Metformin 500 mg"],
-                      ["DIN", "00226514"],
-                      ["Qty / Refills", "60 · 3"],
-                      ["SIG", "1 tab PO BID"],
-                    ].map(([k, v]) => (
-                      <div key={k} className="flex items-baseline justify-between gap-3 border-b border-[#1C1C1C]/06 pb-2 last:border-0">
-                        <dt className="text-[#1C1C1C]/45">{k}</dt>
-                        <dd className="text-right font-medium text-[#1C1C1C]">{v}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                  <div className="mt-5 flex h-10 items-center justify-center rounded-full bg-[#1F4A4D] text-[12px] font-medium text-[#F6F4EF]">
-                    Ready for Kroll
-                  </div>
-                </div>
+              </div>
+              <div className="bg-[#111] p-6 sm:p-8">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/35">
+                  Extracted fields
+                </p>
+                <dl className="mt-6 space-y-0">
+                  {[
+                    ["Patient", "Eleanor Whitfield"],
+                    ["DOB", "1957-02-03"],
+                    ["Drug", "Apo-Metformin 500 mg"],
+                    ["DIN", "00226514"],
+                    ["Qty / Refills", "60 · 3"],
+                    ["SIG", "1 tab PO BID with food"],
+                  ].map(([k, v], i) => (
+                    <div
+                      key={k}
+                      className={cn(
+                        "flex items-baseline justify-between gap-4 py-3.5",
+                        i < 5 && "border-b border-white/[0.06]",
+                      )}
+                    >
+                      <dt className="text-[13px] text-white/40">{k}</dt>
+                      <dd className="text-right text-[14px] font-medium text-white">{v}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <button
+                  type="button"
+                  className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-full bg-[#C45C26] text-[13px] font-semibold text-white"
+                >
+                  Push to Kroll
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
               </div>
             </div>
-            <p className="mt-4 text-center text-[11px] text-[#1C1C1C]/40">
-              Illustrative layout — not live patient data
-            </p>
           </div>
+          <p className="mt-4 text-center text-[12px] text-[#0E0E0E]/4">
+            Illustrative UI — no live patient data shown
+          </p>
         </div>
       </section>
 
-      {/* Quiet metrics strip */}
-      <section className="border-y border-[#1C1C1C]/08 bg-[#EFECE6]">
-        <div className="mx-auto grid max-w-[72rem] grid-cols-2 gap-8 px-5 py-12 sm:grid-cols-4 sm:px-8">
+      {/* Metrics — ink band */}
+      <section className="border-y border-[#0E0E0E] bg-[#0E0E0E] text-[#F4F1EA]">
+        <div className="mx-auto grid max-w-[78rem] grid-cols-2 gap-8 px-5 py-14 sm:grid-cols-4 sm:px-8 sm:py-16">
           {[
-            { v: "6–8 h", l: "Typing saved / tech / day" },
-            { v: "2–3 s", l: "Typical extraction" },
-            { v: "1 store", l: "Isolated tenancy" },
+            { v: "6–8h", l: "Saved per tech / day" },
+            { v: "2–3s", l: "Extraction time" },
+            { v: "100%", l: "Store isolation" },
             { v: "$199", l: "CAD / store / month" },
           ].map((s) => (
             <div key={s.l}>
-              <p className="text-2xl font-semibold tracking-tight text-[#1C1C1C] sm:text-3xl">{s.v}</p>
-              <p className="mt-1 text-[12px] text-[#1C1C1C]/5">{s.l}</p>
+              <p className="text-3xl font-bold tracking-tight sm:text-4xl">{s.v}</p>
+              <p className="mt-2 text-[13px] text-white/45">{s.l}</p>
             </div>
           ))}
         </div>
       </section>
 
-      {/* Problem — sparse editorial */}
+      {/* Problem — big type */}
       <section id="product" className="scroll-mt-24 py-24 sm:py-32">
-        <div className="mx-auto max-w-[72rem] px-5 sm:px-8">
-          <div className="max-w-2xl">
-            <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[#1C1C1C]/4">
-              The workday
-            </p>
-            <h2 className="mt-4 text-[2rem] font-semibold leading-[1.15] tracking-[-0.03em] sm:text-[2.75rem]">
-              Most of the shift is still
-              <span className="text-[#1C1C1C]/4"> retyping what was already written.</span>
-            </h2>
-            <p className="mt-6 text-[1.05rem] leading-relaxed text-[#1C1C1C]/6">
-              Faxes arrive. Someone opens Kroll. Patient. Doctor. DIN. Quantity. SIG.
-              Again. Pharma Flow shortens that loop without replacing clinical judgement.
-            </p>
-          </div>
+        <div className="mx-auto max-w-[78rem] px-5 sm:px-8">
+          <p className="text-[12px] font-semibold uppercase tracking-[0.22em] text-[#C45C26]">
+            The bottleneck
+          </p>
+          <h2 className="mt-5 max-w-[16ch] text-[2.5rem] font-bold leading-[1.05] tracking-[-0.035em] sm:text-[3.5rem]">
+            Half the shift is still retyping the fax.
+          </h2>
+          <p className="mt-6 max-w-xl text-[1.1rem] leading-relaxed text-[#0E0E0E]/6">
+            Patient. Prescriber. DIN. Quantity. SIG. Over and over into 15-year-old Windows software.
+            Slow. Error-prone. Exhausting.
+          </p>
 
-          <div className="mt-16 grid gap-px overflow-hidden rounded-2xl border border-[#1C1C1C]/1 bg-[#1C1C1C]/1 sm:grid-cols-3">
+          <div className="mt-16 grid gap-4 sm:grid-cols-3">
             {[
               {
-                t: "Hours on intake",
-                b: "Technicians lose half a day to the same fields on every script.",
+                t: "Hours lost",
+                b: "Technicians burn most of the day on the same fields for every script.",
               },
               {
-                t: "Noise on the page",
-                b: "Handwriting, fax compression, and cover sheets slow everyone down.",
+                t: "Noisy pages",
+                b: "Handwriting, fax compression, and cover sheets force constant re-work.",
               },
               {
                 t: "Typing risk",
-                b: "Wrong DIN or patient ID is a safety issue, not a software quirk.",
+                b: "Wrong DIN or patient ID is a safety issue — not a software quirk.",
               },
-            ].map((card) => (
-              <div key={card.t} className="bg-[#F6F4EF] p-8 sm:p-10">
-                <h3 className="text-[1.05rem] font-semibold tracking-tight">{card.t}</h3>
-                <p className="mt-3 text-[14px] leading-relaxed text-[#1C1C1C]/55">{card.b}</p>
+            ].map((card, i) => (
+              <div
+                key={card.t}
+                className={cn(
+                  "rounded-2xl p-8 sm:p-10",
+                  i === 1 ? "bg-[#0E0E0E] text-[#F4F1EA]" : "bg-white ring-1 ring-[#0E0E0E]/08",
+                )}
+              >
+                <p className="font-mono text-[12px] opacity-40">0{i + 1}</p>
+                <h3 className="mt-4 text-[1.25rem] font-bold tracking-tight">{card.t}</h3>
+                <p
+                  className={cn(
+                    "mt-3 text-[14px] leading-relaxed",
+                    i === 1 ? "text-white/55" : "text-[#0E0E0E]/55",
+                  )}
+                >
+                  {card.b}
+                </p>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* How */}
-      <section id="how" className="scroll-mt-24 border-t border-[#1C1C1C]/08 bg-[#EFECE6] py-24 sm:py-32">
-        <div className="mx-auto max-w-[72rem] px-5 sm:px-8">
-          <div className="max-w-xl">
-            <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[#1F4A4D]">
-              Process
+      {/* How — numbered large */}
+      <section id="how" className="scroll-mt-24 bg-[#EBE7DE] py-24 sm:py-32">
+        <div className="mx-auto max-w-[78rem] px-5 sm:px-8">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-[12px] font-semibold uppercase tracking-[0.22em] text-[#C45C26]">
+                Process
+              </p>
+              <h2 className="mt-4 text-[2.5rem] font-bold tracking-[-0.035em] sm:text-[3.25rem]">
+                Fax in.
+                <br />
+                Kroll filled.
+              </h2>
+            </div>
+            <p className="max-w-sm text-[15px] leading-relaxed text-[#0E0E0E]/55">
+              Four steps. One human check. No new workflow for your staff — just less keyboard time.
             </p>
-            <h2 className="mt-4 text-[2rem] font-semibold tracking-[-0.03em] sm:text-[2.5rem]">
-              Four steps. One verification.
-            </h2>
           </div>
 
-          <ol className="mt-14 grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
+          <ol className="mt-16 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {steps.map((step) => (
-              <li key={step.n} className="relative">
-                <span className="font-mono text-[12px] text-[#1C1C1C]/35">{step.n}</span>
-                <h3 className="mt-3 text-[1.05rem] font-semibold tracking-tight">{step.title}</h3>
-                <p className="mt-2 text-[14px] leading-relaxed text-[#1C1C1C]/55">{step.body}</p>
+              <li
+                key={step.n}
+                className="rounded-2xl bg-[#F4F1EA] p-7 ring-1 ring-[#0E0E0E]/06"
+              >
+                <span className="text-[2rem] font-bold tracking-tight text-[#C45C26]">{step.n}</span>
+                <h3 className="mt-4 text-[1.1rem] font-bold tracking-tight">{step.title}</h3>
+                <p className="mt-2 text-[14px] leading-relaxed text-[#0E0E0E]/55">{step.body}</p>
               </li>
             ))}
           </ol>
         </div>
       </section>
 
-      {/* Safety / principles */}
+      {/* Safety */}
       <section id="safety" className="scroll-mt-24 py-24 sm:py-32">
-        <div className="mx-auto max-w-[72rem] px-5 sm:px-8">
-          <div className="grid gap-16 lg:grid-cols-[0.9fr_1.1fr] lg:gap-20">
+        <div className="mx-auto max-w-[78rem] px-5 sm:px-8">
+          <div className="grid gap-16 lg:grid-cols-[1fr_1.15fr] lg:gap-24">
             <div>
-              <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[#1C1C1C]/4">
+              <p className="text-[12px] font-semibold uppercase tracking-[0.22em] text-[#C45C26]">
                 Guardrails
               </p>
-              <h2 className="mt-4 text-[2rem] font-semibold tracking-[-0.03em] sm:text-[2.5rem]">
-                Built to stay out of clinical decisioning.
+              <h2 className="mt-4 text-[2.25rem] font-bold leading-[1.1] tracking-[-0.03em] sm:text-[2.75rem]">
+                Outside clinical decisioning. By design.
               </h2>
             </div>
-            <div className="space-y-10">
-              {principles.map((p) => (
-                <div key={p.title} className="border-t border-[#1C1C1C]/1 pt-8 first:border-t-0 first:pt-0">
-                  <h3 className="text-[1.1rem] font-semibold">{p.title}</h3>
-                  <p className="mt-2 max-w-lg text-[15px] leading-relaxed text-[#1C1C1C]/55">{p.body}</p>
+            <div className="space-y-0">
+              {principles.map((p, i) => (
+                <div
+                  key={p.title}
+                  className={cn(
+                    "border-t border-[#0E0E0E]/12 py-8",
+                    i === principles.length - 1 && "border-b",
+                  )}
+                >
+                  <h3 className="text-[1.15rem] font-bold">{p.title}</h3>
+                  <p className="mt-2 max-w-lg text-[15px] leading-relaxed text-[#0E0E0E]/55">{p.body}</p>
                 </div>
               ))}
             </div>
@@ -339,60 +372,83 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Pricing */}
-      <section id="pricing" className="scroll-mt-24 border-t border-[#1C1C1C]/08 bg-[#1C1C1C] py-24 text-[#F6F4EF] sm:py-32">
-        <div className="mx-auto grid max-w-[72rem] gap-12 px-5 sm:px-8 lg:grid-cols-[1fr_0.85fr] lg:items-center">
-          <div>
-            <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-[#F6F4EF]/45">
-              Simple pricing
-            </p>
-            <h2 className="mt-4 text-[2.25rem] font-semibold tracking-[-0.03em] sm:text-[3rem]">
-              $199
-              <span className="text-[1.1rem] font-normal text-[#F6F4EF]/45"> CAD / store / month</span>
-            </h2>
-            <p className="mt-4 max-w-md text-[15px] leading-relaxed text-[#F6F4EF]/55">
-              One transparent rate for independent stores. Pilot first — keep it only if the hours come back.
-            </p>
-            <Link
-              to="/login"
-              className="mt-8 inline-flex h-12 items-center gap-2 rounded-full bg-[#F6F4EF] px-7 text-[14px] font-medium text-[#1C1C1C] transition hover:bg-white"
-            >
-              Start free pilot
-              <ArrowRight className="h-4 w-4" />
-            </Link>
+      {/* Pricing — full dark */}
+      <section id="pricing" className="scroll-mt-24 bg-[#0E0E0E] py-24 text-[#F4F1EA] sm:py-32">
+        <div className="mx-auto max-w-[78rem] px-5 sm:px-8">
+          <div className="grid gap-14 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+            <div>
+              <p className="text-[12px] font-semibold uppercase tracking-[0.22em] text-[#C45C26]">
+                Pricing
+              </p>
+              <h2 className="mt-4 text-[3.5rem] font-bold tracking-[-0.04em] sm:text-[5rem]">
+                $199
+              </h2>
+              <p className="mt-1 text-[1.1rem] text-white/45">CAD per store / month</p>
+              <p className="mt-6 max-w-md text-[15px] leading-relaxed text-white/55">
+                One rate. Pilot first. Keep it only if the hours come back to the dispensary floor.
+              </p>
+              <Link
+                to="/login"
+                className="mt-10 inline-flex h-12 items-center gap-2 rounded-full bg-[#C45C26] px-8 text-[14px] font-semibold text-white transition hover:bg-[#A84C1F]"
+              >
+                Start free pilot
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </div>
+            <ul className="space-y-1 rounded-2xl border border-white/10 bg-white/[0.03] p-2">
+              {pricingLines.map((line) => (
+                <li
+                  key={line}
+                  className="flex items-center gap-3 rounded-xl px-5 py-4 text-[14px] text-white/80"
+                >
+                  <Check className="h-4 w-4 shrink-0 text-[#C45C26]" />
+                  {line}
+                </li>
+              ))}
+            </ul>
           </div>
-          <ul className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.03] p-8">
-            {pricingLines.map((line) => (
-              <li key={line} className="flex items-start gap-3 text-[14px] text-[#F6F4EF]/8">
-                <Check className="mt-0.5 h-4 w-4 shrink-0 text-[#6D8164]" />
-                {line}
-              </li>
-            ))}
-          </ul>
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-[#1C1C1C]/08 bg-[#F6F4EF]">
-        <div className="mx-auto flex max-w-[72rem] flex-col gap-6 px-5 py-12 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+      {/* Final CTA band */}
+      <section className="border-t border-[#0E0E0E]/1 bg-[#F4F1EA] py-20 sm:py-24">
+        <div className="mx-auto max-w-[78rem] px-5 text-center sm:px-8">
+          <h2 className="text-[2.25rem] font-bold tracking-[-0.03em] sm:text-[3rem]">
+            Give the keyboard back to the pharmacy.
+          </h2>
+          <p className="mx-auto mt-4 max-w-lg text-[15px] text-[#0E0E0E]/55">
+            14 days on one workstation. No card. Delete anytime.
+          </p>
+          <Link
+            to="/login"
+            className="mt-8 inline-flex h-12 items-center gap-2 rounded-full bg-[#0E0E0E] px-8 text-[14px] font-semibold text-[#F4F1EA] transition hover:bg-[#222]"
+          >
+            Start the pilot
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
+      </section>
+
+      <footer className="border-t border-[#0E0E0E]/1 bg-[#EBE7DE]">
+        <div className="mx-auto flex max-w-[78rem] flex-col gap-6 px-5 py-10 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <div className="flex items-center gap-3">
-            <span className="flex h-7 w-7 items-center justify-center rounded-sm bg-[#1C1C1C] text-[10px] font-semibold tracking-[0.12em] text-[#F6F4EF]">
+            <span className="flex h-8 w-8 items-center justify-center rounded-[4px] bg-[#0E0E0E] text-[10px] font-bold tracking-[0.12em] text-[#F4F1EA]">
               PF
             </span>
-            <span className="text-[13px] text-[#1C1C1C]/55">Pharma Flow</span>
+            <span className="text-[13px] font-medium text-[#0E0E0E]/6">Pharma Flow</span>
           </div>
-          <div className="flex flex-wrap gap-6 text-[13px] text-[#1C1C1C]/5">
-            <Link to="/login" className="hover:text-[#1C1C1C]">
+          <div className="flex flex-wrap gap-6 text-[13px] text-[#0E0E0E]/5">
+            <Link to="/login" className="hover:text-[#0E0E0E]">
               Sign in
             </Link>
-            <a href="#safety" className="hover:text-[#1C1C1C]">
+            <a href="#safety" className="hover:text-[#0E0E0E]">
               Safety
             </a>
-            <a href="#pricing" className="hover:text-[#1C1C1C]">
+            <a href="#pricing" className="hover:text-[#0E0E0E]">
               Pricing
             </a>
           </div>
-          <p className="text-[12px] text-[#1C1C1C]/35">© {new Date().getFullYear()} Pharma Flow</p>
+          <p className="text-[12px] text-[#0E0E0E]/35">© {new Date().getFullYear()} Pharma Flow</p>
         </div>
       </footer>
     </div>
