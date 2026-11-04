@@ -1,7 +1,7 @@
 import * as React from "react";
 import { toast } from "sonner";
 
-import { resolveDinStatus } from "@/services/dpd";
+import { enrichMedicationFromDin, resolveDinStatus } from "@/services/dpd";
 import { LocalHelperClient, type HelperInfo, type HelperStatus, type PushOutcome } from "@/services/agent";
 import { createSampleDocument, createSampleDocuments, uid } from "@/services/mockVision";
 import { countPdfPages } from "@/services/pdf";
@@ -92,7 +92,6 @@ function loadSettings(): Settings {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const merged = { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
-    // Older builds defaulted to a localhost:8000 API that never existed.
     if (merged.apiBaseUrl === "http://localhost:8000") merged.apiBaseUrl = "";
     return merged;
   } catch {
@@ -129,7 +128,6 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
 
   const sampleCursor = React.useRef(0);
 
-  // Poll the desktop helper's /health endpoint so the header indicator is live.
   React.useEffect(() => {
     const client = helperRef.current!;
     const unsubscribe = client.subscribe(setHelperStatus);
@@ -285,11 +283,9 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
           if (script.id !== scriptId) return script;
           const medications = script.medications.map((med) => {
             if (med.id !== medId) return med;
-            const merged = { ...med, ...patch };
+            let merged = { ...med, ...patch };
             if (patch.din !== undefined || patch.is_compound !== undefined) {
-              const resolved = resolveDinStatus(merged.din, merged.is_compound);
-              merged.din_status = resolved.status;
-              merged.din_product = resolved.product;
+              merged = enrichMedicationFromDin(merged);
             }
             return merged;
           });
@@ -344,16 +340,18 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     setScripts((prev) =>
       prev.map((script) => {
         if (script.id !== scriptId) return script;
+        const medications = script.medications.map((med) => {
+          if (med.id !== medId) return med;
+          return enrichMedicationFromDin(med);
+        });
         return {
           ...script,
-          medications: script.medications.map((med) => {
-            if (med.id !== medId) return med;
-            const resolved = resolveDinStatus(med.din, med.is_compound);
-            return { ...med, din_status: resolved.status, din_product: resolved.product };
-          }),
+          medications,
+          dinVerifiedCount: medications.filter((m) => m.din_status === "verified").length,
         };
       }),
     );
+    toast.success("DIN re-checked against Health Canada DPD");
   }, []);
 
   const verifyScript = React.useCallback(
@@ -428,7 +426,12 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   const createManualScript = React.useCallback(
     (input: ManualScriptInput) => {
       const documentId = uid("doc");
-      const resolved = resolveDinStatus(input.din, input.is_compound);
+      const enriched = enrichMedicationFromDin({
+        din: input.din,
+        drug_name: input.drug_name,
+        strength: input.strength,
+        is_compound: input.is_compound,
+      });
       const now = new Date().toISOString();
       const document: ProcessedDocument = {
         id: documentId,
@@ -462,16 +465,16 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         medications: [
           {
             id: uid("med"),
-            drug_name: input.drug_name,
-            din: input.din,
-            strength: input.strength,
+            drug_name: enriched.drug_name,
+            din: enriched.din,
+            strength: enriched.strength,
             quantity: input.quantity,
             refills: input.refills,
             sig: input.sig,
             is_compound: input.is_compound,
             confidence: 1,
-            din_status: resolved.status,
-            din_product: resolved.product,
+            din_status: enriched.din_status,
+            din_product: enriched.din_product,
             field_scores: {
               drug_name: 1,
               din: 1,
@@ -487,7 +490,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         flags: ["Manually keyed by technician"],
         notes: "",
         status: "pending",
-        dinVerifiedCount: resolved.status === "verified" ? 1 : 0,
+        dinVerifiedCount: enriched.din_status === "verified" ? 1 : 0,
       };
       setDocuments((prev) => [document, ...prev]);
       setScripts((prev) => [script, ...prev]);
