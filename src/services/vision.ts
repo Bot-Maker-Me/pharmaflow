@@ -1,5 +1,5 @@
 import type { ProcessedDocument, Script, Settings } from "@/lib/types";
-import { resolveDinStatus } from "./dpd";
+import { enrichMedicationFromDin } from "./dpd";
 import { createSyntheticExtraction, uid } from "./mockVision";
 import { renderDocumentPages } from "./pageImages";
 
@@ -9,7 +9,7 @@ import { renderDocumentPages } from "./pageImages";
  * Contract with the backend (`POST {apiBaseUrl}/api/extract`):
  *
  *   request  { file_name, page_count, page_images: string[] }   // data URLs
- *   response { scripts: VisionScript[], model: "claude-3-5-sonnet" | "gpt-4o" }
+ *   response { scripts: VisionScript[], model }
  *
  * Demo mode short-circuits the network and uses the deterministic generator so
  * the intake/verify/push workflow is fully functional offline.
@@ -19,11 +19,13 @@ export const EXTRACTION_SYSTEM_PROMPT = `You are a licensed-pharmacy intake assi
 You are given a scanned faxed prescription. Extract every prescription on the page.
 Rules:
 - Return ONLY JSON matching the provided schema. No prose.
+- Always capture drug_name, strength, DIN when printed, health_card_num when printed.
 - Translate Latin sig abbreviations (BID, TID, QID, QHS, PRN, PO, SL, gtt) into plain English.
 - Dates must be ISO 8601 (YYYY-MM-DD). Canadian health cards keep their province suffix.
 - Provide a confidence score 0.0-1.0 for every field and for the whole document.
 - Set is_compound = true when the product has no DIN (extemporaneous preparation).
-- Set illegible_handwriting = true when any character could not be confidently read.`;
+- Set illegible_handwriting = true when any character could not be confidently read.
+- NEVER invent a DIN or health card number.`;
 
 export interface VisionScript {
   document_metadata?: { is_multi_page?: boolean; page_number?: number; is_prescription?: boolean };
@@ -62,20 +64,25 @@ function mapWireScript(
 ): Script {
   const medications = wire.medications.map((med) => {
     const isCompound = Boolean(med.is_compound);
-    const { status, product } = resolveDinStatus(med.din ?? "", isCompound);
     const confidence = med.confidence ?? 0.8;
-    return {
-      id: uid("med"),
-      drug_name: med.drug_name,
+    const enriched = enrichMedicationFromDin({
+      drug_name: med.drug_name ?? "",
       din: med.din ?? "",
       strength: med.strength ?? "",
+      is_compound: isCompound,
+    });
+    return {
+      id: uid("med"),
+      drug_name: enriched.drug_name,
+      din: enriched.din,
+      strength: enriched.strength,
       quantity: med.quantity ?? 0,
       refills: med.refills ?? 0,
       sig: med.sig ?? "",
       is_compound: isCompound,
       confidence,
-      din_status: status,
-      din_product: product,
+      din_status: enriched.din_status,
+      din_product: enriched.din_product,
       field_scores: {
         drug_name: confidence,
         din: confidence,
@@ -129,7 +136,7 @@ function mapWireScript(
   };
 }
 
-const PAGES_PER_REQUEST = 3; // keeps each request well under Vercel's 4.5 MB body limit
+const PAGES_PER_REQUEST = 3;
 
 export async function requestExtraction(
   document: ProcessedDocument,
@@ -164,7 +171,6 @@ export async function requestExtraction(
 
       const data = (await response.json()) as { scripts?: VisionScript[] };
       for (const wire of data.scripts ?? []) {
-        // Page numbers come back relative to the batch; make them document-absolute.
         const pageNumber = (wire.document_metadata?.page_number ?? 1) + offset;
         wireScripts.push({
           ...wire,
