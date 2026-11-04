@@ -1,0 +1,18 @@
+--- a/helper/flow.py
++++ b/helper/flow.py
+@@ -69,7 +69,7 @@
+ BATCH_SIZE = 50
+ HEARTBEAT_EVERY_SEC = 300
+-AGENT_CODE_VERSION = "1.2.0"     # reported in heartbeats so the dashboard shows which code is running
++AGENT_CODE_VERSION = "1.3.0"     # reported in heartbeats so the dashboard shows which code is running
+ RECHECK_EVERY_SEC = 60            # how often rows still being filled in by staff are re-read
+ COMPARE_EVERY_SEC = 600          # how often SHADOW looks for staff entries
+ COMPARE_GIVE_UP_DAYS = 3         # an AUTO decision never entered by staff after this long is reported as such
+@@ -221,6 +221,7 @@
+         self.go_live_min_match: float = cp.getfloat("Shadow", "GO_LIVE_MIN_MATCH", fallback=0.995)
+         self.go_live_min_samples: int = cp.getint("Shadow", "GO_LIVE_MIN_SAMPLES", fallback=200)
+         self.go_live_min_auto: float = cp.getfloat("Shadow", "GO_LIVE_MIN_AUTO_RATE", fallback=0.80)
++        self.auto_learn: bool = cp.getboolean("Shadow", "AUTO_LEARN", fallback=True)
+ 
+         # SHADOW also records to Supabase (decisions + comparisons) when the cloud is configured.
+         self.cloud_enabled: bool = bool(self.api_url and self.api_key and "CHANGE_ME" not in self.api_key)
