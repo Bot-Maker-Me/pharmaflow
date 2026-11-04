@@ -12,7 +12,7 @@ export function Marquee({ items, className }: MarqueeProps) {
   return (
     <div
       className={cn(
-        "overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_12%,black_88%,transparent)]",
+        "overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_10%,black_90%,transparent)]",
         className,
       )}
     >
@@ -20,10 +20,10 @@ export function Marquee({ items, className }: MarqueeProps) {
         {loop.map((item, i) => (
           <span
             key={`${item}-${i}`}
-            className="flex items-center gap-12 whitespace-nowrap text-sm font-medium text-slate-400 transition-colors hover:text-white"
+            className="flex items-center gap-12 whitespace-nowrap text-sm font-medium text-white/55 transition-colors hover:text-white"
           >
             {item}
-            <span aria-hidden className="h-1 w-1 rounded-full bg-indigo-400/60" />
+            <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[#C45C26]/70" />
           </span>
         ))}
       </div>
