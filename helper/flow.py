@@ -1,23 +1,27 @@
-"""PharmFlow agent — expands local payload (no network required)."""
+"""PharmFlow agent entrypoint.
+
+Requires flow_body.py in this folder (from git pull or recover_agent.py).
+"""
 from __future__ import annotations
 
-import base64
+import pathlib
+import runpy
 import sys
-import zlib
-from pathlib import Path
 
-_BASE = Path(__file__).resolve().parent
-_CHUNKS = sorted(_BASE.glob("_agent_c*.b64"))
-if not _CHUNKS:
-    sys.stderr.write(
-        "Missing _agent_c*.b64 next to flow.py.\n"
-        "Copy the full helper folder from GitHub (git pull).\n"
-    )
-    sys.exit(1)
+BASE = pathlib.Path(__file__).resolve().parent
+BODY = BASE / "flow_body.py"
 
-_code = zlib.decompress(base64.b64decode("".join(p.read_text(encoding="ascii") for p in _CHUNKS)))
-_globals = {
-    "__name__": "__main__" if __name__ == "__main__" else "flow",
-    "__file__": str(_BASE / "flow_body.py"),
-}
-exec(compile(_code, str(_BASE / "flow_body.py"), "exec"), _globals)
+
+def main():
+    if not BODY.exists() or BODY.stat().st_size < 10000:
+        sys.stderr.write(
+            "\n[PharmFlow] Missing flow_body.py\n"
+            "Fix: put flow_body.py next to flow.py (see helper/AGENT_RECOVER.md)\n"
+            "Then: python flow.py --test\n\n"
+        )
+        sys.exit(2)
+    runpy.run_path(str(BODY), run_name="__main__")
+
+
+if __name__ == "__main__":
+    main()
