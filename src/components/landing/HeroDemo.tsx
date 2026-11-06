@@ -1,192 +1,211 @@
-import { useEffect, useRef, useState } from "react";
-import type { MouseEvent } from "react";
-import { CheckCircle2, FileText, Loader2, ShieldCheck } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { useReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
 
-const ACCENT = "#C8F542";
+interface Field {
+  label: string;
+  value: string;
+  /** What the tech actually sees handwritten or printed on the fax. */
+  fax?: string;
+  /** Where the value came from when it is not on the page. */
+  source?: string;
+}
 
-const rows = [
-  { label: "Patient", value: "Eleanor Whitfield", bar: "w-3/4" },
-  { label: "DOB", value: "1957-02-03", bar: "w-1/3" },
-  { label: "Drug", value: "Apo-Metformin 500 mg", bar: "w-4/5" },
-  { label: "DIN", value: "00226514", bar: "w-1/4" },
-  { label: "Qty / Refills", value: "60 · 3", bar: "w-1/5" },
-  { label: "SIG", value: "1 tab PO BID", bar: "w-2/5" },
+const fields: Field[] = [
+  { label: "Patient", value: "Whitfield, Eleanor", fax: "Eleanor Whitfield" },
+  { label: "Date of birth", value: "1957-02-03", fax: "DOB 1957-02-03" },
+  { label: "Drug", value: "Apo-Metformin 500 mg", fax: "Metformin 500 mg" },
+  { label: "DIN", value: "00226514", source: "Health Canada drug database" },
+  { label: "Quantity and refills", value: "60, 3 refills", fax: "#60  refills x3" },
+  { label: "Directions", value: "1 tab by mouth twice daily", fax: "1 tab BID" },
+];
+
+const keystrokes = [
+  { key: "F3", text: "Whitfield, Eleanor" },
+  { key: "F5", text: "00226514" },
+  { key: "F7", text: "1 TAB PO BID" },
 ];
 
 const EXTRACT_FROM = 1;
-const READY_AT = rows.length + EXTRACT_FROM + 1;
-const PUSHING_AT = READY_AT + 2;
-const DONE_AT = PUSHING_AT + 1;
+const READY_AT = fields.length + EXTRACT_FROM + 1;
+const PUSH_AT = READY_AT + 2;
+const DONE_AT = PUSH_AT + keystrokes.length + 1;
 const LOOP_AT = DONE_AT + 4;
+
+function Check({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden className={className} fill="none" stroke="currentColor" strokeWidth="2.2">
+      <path d="M3 8.5l3.2 3L13 4.5" strokeLinecap="square" />
+    </svg>
+  );
+}
 
 export function HeroDemo() {
   const reduced = useReducedMotion();
-  const [tick, setTick] = useState(reduced ? READY_AT : 0);
-  const [paused, setPaused] = useState(false);
-  const tiltRef = useRef<HTMLDivElement>(null);
+  const [tick, setTick] = useState(reduced ? DONE_AT : 0);
 
   useEffect(() => {
-    if (reduced || paused) return;
-    const id = window.setInterval(() => setTick((t) => (t + 1 >= LOOP_AT ? 0 : t + 1)), 800);
+    if (reduced) {
+      setTick(DONE_AT);
+      return;
+    }
+    const id = window.setInterval(() => setTick((t) => (t + 1 >= LOOP_AT ? 0 : t + 1)), 750);
     return () => window.clearInterval(id);
-  }, [reduced, paused]);
+  }, [reduced]);
 
-  const extracted = Math.max(0, Math.min(rows.length, tick - EXTRACT_FROM));
+  const extracted = Math.max(0, Math.min(fields.length, tick - EXTRACT_FROM));
   const scanning = tick < READY_AT - 1;
-  const ready = tick >= READY_AT && tick < PUSHING_AT;
-  const pushing = tick >= PUSHING_AT && tick < DONE_AT;
+  const ready = tick >= READY_AT && tick < PUSH_AT;
+  const pushing = tick >= PUSH_AT && tick < DONE_AT;
   const done = tick >= DONE_AT;
-  const confidence = Math.round((96 * extracted) / rows.length);
+  const typed = done ? keystrokes.length : Math.max(0, Math.min(keystrokes.length, tick - PUSH_AT + 1));
+  const confidence = Math.round((96 * extracted) / fields.length);
 
-  const onMove = (e: MouseEvent<HTMLDivElement>) => {
-    const el = tiltRef.current;
-    if (!el || reduced) return;
-    const rect = el.getBoundingClientRect();
-    const px = (e.clientX - rect.left) / rect.width - 0.5;
-    const py = (e.clientY - rect.top) / rect.height - 0.5;
-    el.style.transform = `perspective(1200px) rotateX(${(-py * 4).toFixed(2)}deg) rotateY(${(px * 5).toFixed(2)}deg)`;
-  };
-
-  const onLeave = () => {
-    setPaused(false);
-    if (tiltRef.current) tiltRef.current.style.transform = "perspective(1200px) rotateX(0deg) rotateY(0deg)";
-  };
-
-  const push = () => {
-    if (ready) setTick(PUSHING_AT);
-  };
+  const status = done
+    ? "Saved in Kroll"
+    : pushing
+      ? "Typing into Kroll"
+      : ready
+        ? "Waiting for your check"
+        : "Reading the fax";
 
   return (
-    <div className="relative mx-auto max-w-5xl">
-      <div
-        className={cn(
-          "pointer-events-none absolute -top-3 right-4 z-10 hidden items-center gap-2 rounded-full border border-emerald-400/30 bg-[#0A0A0A] px-3 py-1.5 text-xs font-medium text-emerald-300 shadow-lg transition-opacity duration-500 lg:flex",
-          extracted >= 4 ? "opacity-100" : "opacity-0",
-        )}
-      >
-        <ShieldCheck className="h-3.5 w-3.5" />
-        DIN verified · Health Canada
-      </div>
-      <div className="pointer-events-none absolute -left-1 bottom-16 z-10 hidden items-center gap-2 rounded-full border border-white/15 bg-[#0A0A0A] px-3 py-1.5 text-xs font-medium text-zinc-200 shadow-lg lg:flex">
-        <FileText className="h-3.5 w-3.5" />
-        Fax split · 3 pages
-      </div>
-
-      <div
-        ref={tiltRef}
-        onMouseMove={onMove}
-        onMouseEnter={() => setPaused(true)}
-        onMouseLeave={onLeave}
-        className="relative overflow-hidden rounded-2xl border border-white/10 bg-[#0C0C0C] shadow-[0_40px_80px_-20px_rgba(0,0,0,0.85)] transition-transform duration-150 ease-out will-change-transform"
-      >
-        <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
-          <div className="h-2.5 w-2.5 rounded-full bg-red-500/80" />
-          <div className="h-2.5 w-2.5 rounded-full bg-amber-400/80" />
-          <div className="h-2.5 w-2.5 rounded-full bg-emerald-400/80" />
-          <span className="ml-3 text-xs text-zinc-500">Pharma Flow · Intake</span>
-          <span className="ml-auto flex items-center gap-1.5 text-xs text-zinc-400">
-            <span
-              className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                done ? "bg-emerald-400" : scanning ? "bg-[#C8F542]" : "bg-amber-400",
-              )}
-            />
-            {done ? "Pushed to Kroll" : pushing ? "Typing into Kroll…" : scanning ? "Reading fax…" : "Ready to verify"}
-          </span>
-        </div>
-
-        <div className="grid gap-0 md:grid-cols-5">
-          <div className="border-r border-white/5 p-5 md:col-span-2">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Document</p>
-            <div className="relative mt-3 aspect-[3/4] overflow-hidden rounded-lg bg-[#EDE8DF] p-4">
-              <div className="mb-3 h-2 w-1/2 rounded bg-[#0E0E0E]/15" />
-              <div className="space-y-3">
-                {rows.map((row, i) => (
-                  <div
-                    key={row.label}
-                    className={cn(
-                      "rounded-md p-1.5 ring-2 transition-colors duration-300",
-                      i < extracted
-                        ? "bg-emerald-400/25 ring-emerald-600/40"
-                        : i === extracted && scanning
-                          ? "ring-[#C8F542]/50 bg-[#C8F542]/20"
-                          : "ring-transparent",
-                    )}
-                  >
-                    <div className="mb-1 h-1.5 w-1/6 rounded bg-[#0E0E0E]/15" />
-                    <div className={cn("h-2.5 rounded bg-[#0E0E0E]/25", row.bar)} />
-                  </div>
-                ))}
-              </div>
-              {scanning && (
-                <div
-                  className="absolute inset-x-0 h-0.5 animate-scan-line shadow-[0_0_14px_2px_rgba(200,245,66,0.55)]"
-                  style={{ background: ACCENT }}
-                />
-              )}
-            </div>
+    <figure className="m-0" aria-label="Demo of a fax becoming a Kroll prescription">
+      <div className="grid border-2 border-pf-ink bg-pf-sheet lg:grid-cols-[1.05fr_1fr_0.82fr]">
+        {/* 1 — the fax */}
+        <section className="border-b-2 border-pf-ink bg-[#F1F2EF] p-5 sm:p-6 lg:border-b-0 lg:border-r-2">
+          <div className="flex items-baseline justify-between">
+            <h3 className="text-[15px] font-bold text-pf-ink">Fax received</h3>
+            <span className="text-[13px] text-pf-slate">3 pages, using page 2</span>
           </div>
 
-          <div className="space-y-3 p-5 md:col-span-3">
-            <div className="flex items-center justify-between">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Extracted fields</p>
-              <span
-                className={cn(
-                  "rounded-full px-2.5 py-0.5 text-xs font-bold tabular-nums",
-                  extracted === rows.length
-                    ? "bg-emerald-500/15 text-emerald-300"
-                    : "text-[#050505]",
-                )}
-                style={extracted === rows.length ? undefined : { background: ACCENT }}
-              >
-                {confidence}% confidence
-              </span>
+          <div className="relative mt-4 -rotate-[0.8deg] overflow-hidden border border-pf-rule bg-white px-5 pb-6 pt-4 shadow-[0_1px_0_#C5CDD1,0_18px_30px_-22px_rgba(16,20,24,0.45)]">
+            <p className="font-data text-[11px] leading-snug text-pf-slate">
+              Riverside Medical Clinic &nbsp; fax 604 555 0142 &nbsp; page 2 of 3
+            </p>
+            <p className="mt-3 font-display text-[3.25rem] font-black italic leading-none text-pf-ink/85">Rx</p>
+
+            <div className="mt-2 space-y-1 font-hand text-[1.55rem] font-medium leading-[1.25] text-[#1F2A44]">
+              {fields
+                .filter((f) => f.fax)
+                .map((f) => {
+                  const idx = fields.indexOf(f);
+                  const done_ = idx < extracted;
+                  const current = idx === extracted && scanning;
+                  return (
+                    <p key={f.label} className="m-0">
+                      <span
+                        className={cn(
+                          "box-decoration-clone px-1 transition-colors duration-300",
+                          done_ ? "bg-pf-amber/45" : current ? "bg-pf-amber/20" : "bg-transparent",
+                        )}
+                      >
+                        {f.fax}
+                      </span>
+                    </p>
+                  );
+                })}
             </div>
 
-            {rows.map((row, i) => {
+            <p className="mt-5 font-hand text-[1.7rem] font-semibold leading-none text-[#1F2A44]/80">M. Okafor</p>
+            <p className="mt-1 font-data text-[10.5px] text-pf-slate">Dr. M. Okafor, licence on file</p>
+
+            {scanning && (
+              <div
+                aria-hidden
+                className="absolute inset-x-0 h-0.5 animate-scan-line bg-pf-amber shadow-[0_0_14px_2px_rgba(242,140,27,0.6)]"
+              />
+            )}
+          </div>
+        </section>
+
+        {/* 2 — the fields */}
+        <section className="flex flex-col border-b-2 border-pf-ink p-5 sm:p-6 lg:border-b-0 lg:border-r-2">
+          <div className="flex items-baseline justify-between">
+            <h3 className="text-[15px] font-bold text-pf-ink">Fields to check</h3>
+            <span className="text-[13px] tabular-nums text-pf-slate">{confidence}% sure</span>
+          </div>
+
+          <dl className="mt-3 flex-1">
+            {fields.map((f, i) => {
               const filled = i < extracted;
               return (
                 <div
-                  key={row.label}
-                  className={cn(
-                    "flex h-11 items-center justify-between rounded-lg border px-3 transition-colors duration-300",
-                    filled ? "border-[#C8F542]/25 bg-white/[0.05]" : "border-white/5 bg-white/[0.02]",
-                  )}
+                  key={f.label}
+                  className="flex min-h-[3.1rem] items-center justify-between gap-4 border-b border-pf-rule py-2"
                 >
-                  <span className="text-xs text-zinc-500">{row.label}</span>
-                  {filled ? (
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-white">{row.value}</span>
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                    </div>
-                  ) : (
-                    <div className="h-2.5 w-24 rounded bg-white/10" />
-                  )}
+                  <dt className="text-[13px] text-pf-slate">{f.label}</dt>
+                  <dd className="m-0 flex items-center gap-2 text-right">
+                    {filled ? (
+                      <>
+                        <span>
+                          <span className="block text-[14px] font-semibold leading-tight text-pf-ink">{f.value}</span>
+                          {f.source && <span className="block text-[11.5px] leading-tight text-pf-slate">{f.source}</span>}
+                        </span>
+                        <Check className="h-3.5 w-3.5 shrink-0 text-pf-ink" />
+                      </>
+                    ) : (
+                      <span aria-hidden className="block h-2 w-20 bg-pf-rule" />
+                    )}
+                  </dd>
                 </div>
               );
             })}
+          </dl>
 
-            <button
-              type="button"
-              onClick={push}
-              disabled={!ready && !done && !pushing}
-              className={cn(
-                "mt-1 flex h-11 w-full items-center justify-center gap-2 rounded-md text-[13px] font-bold transition disabled:opacity-50",
-                done ? "bg-emerald-500 text-white" : "text-[#050505] hover:brightness-110",
-              )}
-              style={done ? undefined : { background: ACCENT }}
-            >
-              {pushing && <Loader2 className="h-4 w-4 animate-spin" />}
-              {done && <CheckCircle2 className="h-4 w-4" />}
-              {done ? "Sent to Kroll" : pushing ? "Typing into Kroll…" : "Push to Kroll"}
-            </button>
+          <button
+            type="button"
+            disabled={!ready}
+            onClick={() => ready && setTick(PUSH_AT)}
+            className={cn(
+              "mt-4 flex h-12 w-full items-center justify-center gap-2 border-2 border-pf-ink text-[14px] font-bold text-pf-ink transition-colors",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pf-ink",
+              ready ? "bg-pf-amber hover:bg-[#FF9C2E]" : done ? "bg-pf-ink text-pf-sheet" : "bg-pf-sheet text-pf-slate",
+            )}
+          >
+            {done && <Check className="h-4 w-4" />}
+            {done ? "Sent to Kroll" : pushing ? "Typing into Kroll" : ready ? "Looks right, send to Kroll" : "Reading the fax"}
+          </button>
+        </section>
+
+        {/* 3 — Kroll */}
+        <section className="bg-pf-ink p-5 text-pf-sheet sm:p-6">
+          <div className="flex items-baseline justify-between">
+            <h3 className="text-[15px] font-bold">Kroll</h3>
+            <span className="flex items-center gap-2 text-[13px] text-pf-sheet/70">
+              <span
+                aria-hidden
+                className={cn("h-2 w-2 rounded-full", done ? "bg-pf-phosphor" : pushing ? "bg-pf-amber" : "bg-pf-sheet/30")}
+              />
+              {status}
+            </span>
           </div>
-        </div>
+
+          <div className="mt-4 min-h-[15rem] border border-pf-sheet/15 bg-black/40 p-4 font-data text-[13px] leading-[1.9] text-pf-phosphor">
+            <p className="text-pf-sheet/55">New prescription</p>
+            {keystrokes.map((k, i) => (
+              <p key={k.key} className={cn("m-0 transition-opacity", i < typed ? "opacity-100" : "opacity-0")}>
+                <span className="mr-3 inline-block w-6 text-pf-amber">{k.key}</span>
+                {k.text}
+              </p>
+            ))}
+            <p className={cn("m-0 mt-2 text-pf-sheet transition-opacity", done ? "opacity-100" : "opacity-0")}>
+              Saved. Ready to fill.
+            </p>
+            {!done && (
+              <span aria-hidden className="mt-1 inline-block h-4 w-2 animate-pulse bg-pf-phosphor motion-reduce:animate-none" />
+            )}
+          </div>
+        </section>
       </div>
-      <p className="mt-4 text-center text-xs text-zinc-600">Interactive demo · hover to pause · click Push when ready</p>
-    </div>
+
+      <figcaption className="mt-3 text-[13px] text-pf-slate">
+        Live demo with made-up patient data. It reads, waits for a person, then types.
+      </figcaption>
+      <p className="sr-only" aria-live="polite">
+        {status}
+      </p>
+    </figure>
   );
 }

@@ -12,6 +12,16 @@ const config: Config = {
     },
     extend: {
       colors: {
+        /* Landing page: fax paper, ink, prescription-vial amber */
+        pf: {
+          paper: "#E9ECEC",
+          sheet: "#FAFAF7",
+          ink: "#101418",
+          slate: "#56636D",
+          rule: "#C5CDD1",
+          amber: "#F28C1B",
+          phosphor: "#8BF5B0",
+        },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
@@ -59,6 +69,9 @@ const config: Config = {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
+        display: ["Archivo Variable", "Archivo", "Arial Narrow", "Helvetica Neue", "sans-serif"],
+        hand: ["Caveat", "Bradley Hand", "cursive"],
+        data: ["IBM Plex Mono", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
         sans: [
           "Inter",
           "ui-sans-serif",
