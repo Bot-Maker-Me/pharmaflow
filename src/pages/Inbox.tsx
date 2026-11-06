@@ -84,7 +84,7 @@ export default function Inbox() {
   async function loadIntoVerify(row: InboxRow) {
     try {
       const patient = [row.patient_first, row.patient_last].filter(Boolean).join(" ").trim();
-      createManualScript({
+      const scriptId = createManualScript({
         full_name: patient || "UNKNOWN PATIENT",
         dob: row.patient_dob ?? "",
         health_card_num: "",
@@ -97,10 +97,14 @@ export default function Inbox() {
         refills: Number(row.refills) || 0,
         sig: row.sig_text ?? "",
         is_compound: false,
+        source: "kroll_sql",
+        pending_rx_id: row.pending_rx_id,
+        drug_id: row.drug_id ?? undefined,
+        store_id: row.store_id,
       });
       await setStatus(row, "processing");
-      toast.success("Loaded — fill the health card and DIN, then verify.");
-      navigate("/app/verify");
+      toast.success("SQL row in Verify — left panel shows Kroll snapshot; fill DIN / health card.");
+      navigate(`/app/verify/${scriptId}`);
     } catch (error) {
       toast.error(`Failed: ${(error as Error).message}`);
     }
@@ -124,8 +128,9 @@ export default function Inbox() {
               <InboxIcon className="h-4 w-4" /> Kroll inbox
             </CardTitle>
             <CardDescription>
-              Prescriptions read from Kroll by flow.py. The health card and DIN are not in the pending table, so
-              the pharmacist completes them in Verification before anything is typed into Kroll.
+              Pipeline A: live rows from flow.py (Kroll SQL). Open Verify for a side-by-side SQL snapshot + editable
+              fields. DIN / health card are often missing on pending — complete them before Push. Pipeline B (fax OCR)
+              still runs from Intake when you upload a PDF.
             </CardDescription>
           </div>
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
