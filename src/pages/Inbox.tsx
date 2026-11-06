@@ -27,6 +27,12 @@ interface InboxRow {
   doctor_licence: string | null;
   status: RowStatus;
   received_at: string;
+  page_image_url?: string | null;
+  ocr_din?: string | null;
+  ocr_drug_name?: string | null;
+  ocr_strength?: string | null;
+  ocr_health_card?: string | null;
+  planned?: { ocr_merged?: Record<string, unknown> } | null;
 }
 
 const TABS: Array<{ id: RowStatus; label: string }> = [
@@ -83,27 +89,43 @@ export default function Inbox() {
 
   async function loadIntoVerify(row: InboxRow) {
     try {
-      const patient = [row.patient_first, row.patient_last].filter(Boolean).join(" ").trim();
+      const merged = (row.planned as { ocr_merged?: any } | null | undefined)?.ocr_merged;
+      const ocrPatient = merged?.patient || {};
+      const ocrPrescriber = merged?.prescriber || {};
+      const ocrMed = merged?.medications?.[0] || {};
+      const patient =
+        ocrPatient.full_name ||
+        [row.patient_first, row.patient_last].filter(Boolean).join(" ").trim();
       const scriptId = createManualScript({
         full_name: patient || "UNKNOWN PATIENT",
-        dob: row.patient_dob ?? "",
-        health_card_num: "",
-        prescriber_name: [row.doctor_first, row.doctor_last].filter(Boolean).join(" ").trim(),
-        license_number: row.doctor_licence ?? "",
-        drug_name: row.drug_id ? `Kroll drug ${row.drug_id}` : "",
-        din: "",
-        strength: "",
-        quantity: Number(row.qty) || 0,
-        refills: Number(row.refills) || 0,
-        sig: row.sig_text ?? "",
-        is_compound: false,
+        dob: ocrPatient.dob || row.patient_dob || "",
+        health_card_num: ocrPatient.health_card_num || row.ocr_health_card || "",
+        prescriber_name:
+          ocrPrescriber.name ||
+          [row.doctor_first, row.doctor_last].filter(Boolean).join(" ").trim(),
+        license_number: ocrPrescriber.license_number || row.doctor_licence || "",
+        drug_name:
+          ocrMed.drug_name ||
+          row.ocr_drug_name ||
+          (row.drug_id ? `Kroll drug ${row.drug_id}` : ""),
+        din: ocrMed.din || row.ocr_din || "",
+        strength: ocrMed.strength || row.ocr_strength || "",
+        quantity: Number(ocrMed.quantity) || Number(row.qty) || 0,
+        refills: Number(ocrMed.refills) || Number(row.refills) || 0,
+        sig: ocrMed.sig || row.sig_text || "",
+        is_compound: Boolean(ocrMed.is_compound),
         source: "kroll_sql",
         pending_rx_id: row.pending_rx_id,
         drug_id: row.drug_id ?? undefined,
         store_id: row.store_id,
+        page_image_url: row.page_image_url || undefined,
       });
       await setStatus(row, "processing");
-      toast.success("SQL row in Verify — left panel shows Kroll snapshot; fill DIN / health card.");
+      toast.success(
+        row.page_image_url || merged
+          ? "SQL + OCR loaded into Verify (image + fields)"
+          : "SQL row loaded — no ScriptImage yet; fill DIN / health card",
+      );
       navigate(`/app/verify/${scriptId}`);
     } catch (error) {
       toast.error(`Failed: ${(error as Error).message}`);
@@ -128,9 +150,7 @@ export default function Inbox() {
               <InboxIcon className="h-4 w-4" /> Kroll inbox
             </CardTitle>
             <CardDescription>
-              Pipeline A: live rows from flow.py (Kroll SQL). Open Verify for a side-by-side SQL snapshot + editable
-              fields. DIN / health card are often missing on pending — complete them before Push. Pipeline B (fax OCR)
-              still runs from Intake when you upload a PDF.
+              Live Kroll SQL + ScriptImage OCR when available. Load into Verify for side-by-side image and fields.
             </CardDescription>
           </div>
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
@@ -162,10 +182,15 @@ export default function Inbox() {
                     <p className="font-medium">
                       {[row.patient_first, row.patient_last].filter(Boolean).join(" ") || "Unknown patient"}
                       <span className="ml-2 font-mono text-xs text-muted-foreground">Rx #{row.pending_rx_id}</span>
+                      {row.page_image_url ? (
+                        <Badge className="ml-2" variant="secondary">
+                          OCR image
+                        </Badge>
+                      ) : null}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
-                      Drug {row.drug_id ?? "?"} · qty {row.qty ?? "?"} · {row.sig_text ?? "no sig"} · Dr{" "}
-                      {[row.doctor_first, row.doctor_last].filter(Boolean).join(" ") || "?"}
+                      {row.ocr_drug_name || `Drug ${row.drug_id ?? "?"}`} · DIN {row.ocr_din || "—"} · qty{" "}
+                      {row.qty ?? "?"} · {row.sig_text ?? "no sig"}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
