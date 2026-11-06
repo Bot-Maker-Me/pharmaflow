@@ -18,12 +18,6 @@ import { Reveal } from "@/components/landing/Reveal";
 import { RotatingWord } from "@/components/landing/RotatingWord";
 import { cn } from "@/lib/utils";
 
-/**
- * Modern product landing — Linear / Stripe inspired.
- * Palette: near-black #09090B, pure white, accent cyan #22D3EE, ink #FAFAFA.
- * Motion: transform + opacity only (no heavy blur loops).
- */
-
 const nav = [
   { href: "#product", label: "Product" },
   { href: "#how", label: "How it works" },
@@ -85,6 +79,50 @@ const features = [
   },
 ];
 
+/** Static brutalist background — no continuous blur animations. */
+function BrutalistBackdrop() {
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+      {/* Hard cyan radial */}
+      <div
+        className="absolute -top-24 left-1/2 h-[520px] w-[900px] -translate-x-1/2"
+        style={{
+          background:
+            "radial-gradient(ellipse at center, rgba(34,211,238,0.22) 0%, transparent 65%)",
+        }}
+      />
+      {/* Dot grid */}
+      <div
+        className="absolute inset-0 opacity-[0.35]"
+        style={{
+          backgroundImage: "radial-gradient(rgba(255,255,255,0.14) 1px, transparent 1px)",
+          backgroundSize: "24px 24px",
+          maskImage: "linear-gradient(to bottom, black 0%, transparent 75%)",
+        }}
+      />
+      {/* Diagonal slash bars */}
+      <div
+        className="absolute -right-10 top-24 h-[420px] w-[220px] rotate-12 border border-white/10 bg-white/[0.03]"
+        style={{ clipPath: "polygon(20% 0, 100% 0, 80% 100%, 0 100%)" }}
+      />
+      <div className="absolute left-[-40px] top-40 h-40 w-40 rotate-45 border-2 border-cyan-400/25" />
+      <div className="absolute right-16 top-56 h-24 w-24 -rotate-6 border border-white/20" />
+      {/* Oversized type stamp */}
+      <p className="absolute -left-4 top-28 select-none text-[clamp(4rem,14vw,9rem)] font-black leading-none tracking-tighter text-white/[0.04]">
+        RX
+      </p>
+      <p className="absolute bottom-8 right-4 select-none text-[clamp(3rem,10vw,6rem)] font-black leading-none tracking-tighter text-white/[0.05]">
+        FLOW
+      </p>
+      {/* Corner brackets */}
+      <div className="absolute left-6 top-24 h-16 w-16 border-l-2 border-t-2 border-cyan-400/40" />
+      <div className="absolute right-6 top-24 h-16 w-16 border-r-2 border-t-2 border-white/20" />
+      {/* Thin rules */}
+      <div className="absolute left-0 right-0 top-[28%] h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
+    </div>
+  );
+}
+
 export default function Landing() {
   const [scrolled, setScrolled] = useState(false);
 
@@ -103,7 +141,6 @@ export default function Landing() {
 
   return (
     <div className="min-h-screen overflow-x-clip bg-[#09090B] text-[#FAFAFA] antialiased selection:bg-cyan-400/30">
-      {/* Nav */}
       <header
         className={cn(
           "fixed inset-x-0 top-0 z-50 transition-colors duration-200",
@@ -141,17 +178,8 @@ export default function Landing() {
         </div>
       </header>
 
-      {/* ── HERO ── */}
       <section className="relative pt-28 pb-8 sm:pt-36 sm:pb-12">
-        {/* Soft gradient only — no looping blur orbs (stutter fix) */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0"
-          style={{
-            background:
-              "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(34,211,238,0.18), transparent 55%), radial-gradient(ellipse 60% 40% at 80% 20%, rgba(45,212,191,0.08), transparent 50%)",
-          }}
-        />
+        <BrutalistBackdrop />
 
         <div className="relative mx-auto max-w-6xl px-5 sm:px-6">
           <Reveal>
@@ -203,12 +231,10 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Marquee */}
       <section className="border-y border-white/10 py-4">
         <Marquee items={worksWith} />
       </section>
 
-      {/* Metrics strip */}
       <section className="border-b border-white/10">
         <div className="mx-auto grid max-w-6xl grid-cols-2 gap-8 px-5 py-12 sm:grid-cols-4 sm:px-6">
           {[
@@ -227,7 +253,6 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Product story */}
       <section id="product" className="scroll-mt-20 py-20 sm:py-28">
         <div className="mx-auto max-w-6xl px-5 sm:px-6">
           <Reveal>
@@ -268,7 +293,6 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* How — visual timeline */}
       <section id="how" className="scroll-mt-20 border-t border-white/10 bg-[#0C0C0E] py-20 sm:py-28">
         <div className="mx-auto max-w-6xl px-5 sm:px-6">
           <Reveal>
@@ -297,15 +321,12 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Product graphic strip — CSS product frames */}
       <section className="border-t border-white/10 py-16 sm:py-20">
         <div className="mx-auto max-w-6xl px-5 sm:px-6">
           <Reveal>
-            <p className="text-center text-[12px] font-medium uppercase tracking-[0.2em] text-cyan-300/80">
-              Product
-            </p>
-            <h2 className="mx-auto mt-3 max-w-[20ch] text-center text-[2rem] font-semibold tracking-[-0.03em] sm:text-[2.5rem]">
-              Verification that shows the page, not just the fields.
+            <p className="text-center text-[12px] font-medium uppercase tracking-[0.2em] text-cyan-300/80">Product</p>
+            <h2 className="mx-auto mt-3 max-w-[22ch] text-center text-[2rem] font-semibold tracking-[-0.03em] sm:text-[2.5rem]">
+              Pipeline A (SQL) + Pipeline B (fax) — verify side by side.
             </h2>
           </Reveal>
 
@@ -319,22 +340,21 @@ export default function Landing() {
               </div>
               <div className="grid md:grid-cols-2">
                 <div className="border-r border-white/5 bg-[#1a1a1c] p-6">
-                  <p className="text-[10px] uppercase tracking-widest text-white/35">Fax page</p>
-                  <div className="mt-3 aspect-[3/4] rounded-lg bg-[#E8E4DC] p-5 shadow-inner">
-                    <div className="mb-4 h-2 w-2/5 rounded bg-black/20" />
-                    <div className="space-y-3">
-                      {["w-4/5", "w-3/5", "w-full", "w-2/3", "w-1/2"].map((w) => (
-                        <div key={w} className={cn("h-2.5 rounded bg-black/15", w)} />
+                  <p className="text-[10px] uppercase tracking-widest text-white/35">Source panel</p>
+                  <div className="mt-3 aspect-[3/4] rounded-lg bg-[#0f172a] p-5 ring-1 ring-cyan-400/30">
+                    <p className="text-xs font-bold text-cyan-300">KROLL SQL SNAPSHOT</p>
+                    <div className="mt-4 space-y-3 text-[11px]">
+                      {["PATIENT", "DRUG ID", "QTY", "SIG"].map((k) => (
+                        <div key={k} className="flex justify-between border-b border-white/10 pb-2">
+                          <span className="text-white/40">{k}</span>
+                          <span className="font-mono text-white/80">••••</span>
+                        </div>
                       ))}
-                    </div>
-                    <div className="mt-8 rounded-md border-2 border-cyan-500/40 bg-cyan-400/10 p-3">
-                      <div className="h-2 w-1/3 rounded bg-cyan-700/30" />
-                      <div className="mt-2 h-3 w-2/3 rounded bg-cyan-700/40" />
                     </div>
                   </div>
                 </div>
                 <div className="space-y-3 p-6">
-                  <p className="text-[10px] uppercase tracking-widest text-white/35">Extracted</p>
+                  <p className="text-[10px] uppercase tracking-widest text-white/35">Editable fields</p>
                   {[
                     ["Patient", "Audrey Lambert"],
                     ["DOB", "1948-07-31"],
@@ -362,7 +382,6 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Features */}
       <section id="safety" className="scroll-mt-20 border-t border-white/10 py-20 sm:py-28">
         <div className="mx-auto max-w-6xl px-5 sm:px-6">
           <div className="grid gap-12 lg:grid-cols-[0.9fr_1.1fr] lg:gap-16">
@@ -392,7 +411,6 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Pricing */}
       <section id="pricing" className="scroll-mt-20 border-t border-white/10 py-20 sm:py-28">
         <div className="mx-auto max-w-6xl px-5 sm:px-6">
           <div className="grid items-center gap-12 lg:grid-cols-2">
@@ -433,7 +451,6 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Final CTA */}
       <section className="border-t border-white/10 py-20">
         <div className="mx-auto max-w-6xl px-5 text-center sm:px-6">
           <Reveal>
