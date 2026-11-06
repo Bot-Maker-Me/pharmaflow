@@ -1,11 +1,5 @@
 /**
- * /api/queue — the pharmacy inbox of prescriptions synced from Kroll by flow.py.
- *
- *   GET   ?status=received|processing|done|error&limit=50   list rows (contains PHI)
- *   PATCH { id, status, error_message? }                    move a row through the workflow
- *
- * Auth: header x-access-token = APP_ACCESS_TOKEN (falls back to EXTRACT_ACCESS_TOKEN).
- * Rows are only ever read/updated with the Supabase service-role key on the server.
+ * /api/queue — prescriptions synced from Kroll by flow.py (+ OCR when ScriptImage present).
  */
 
 import { timingSafeEqual } from "node:crypto";
@@ -14,7 +8,8 @@ const STATUSES = ["received", "processing", "done", "error"];
 const COLUMNS =
   "id,store_id,pending_rx_id,drug_id,qty,refills,sig_text,date_created," +
   "patient_first,patient_last,patient_dob,primary_plan_id,doctor_first,doctor_last,doctor_licence," +
-  "status,error_message,received_at,processed_at";
+  "status,error_message,received_at,processed_at,planned,page_image_url," +
+  "ocr_din,ocr_drug_name,ocr_strength,ocr_health_card";
 
 function send(res, status, body) {
   res.statusCode = status;
@@ -55,7 +50,20 @@ export default async function handler(req, res) {
         `${base}?select=${COLUMNS}&status=eq.${status}&order=received_at.desc&limit=${limit}`,
         { headers },
       );
-      if (!resp.ok) return send(res, 500, { error: "Query failed" });
+      if (!resp.ok) {
+        // Fallback without OCR columns if migration not applied yet
+        const basic =
+          "id,store_id,pending_rx_id,drug_id,qty,refills,sig_text,date_created," +
+          "patient_first,patient_last,patient_dob,primary_plan_id,doctor_first,doctor_last,doctor_licence," +
+          "status,error_message,received_at,processed_at,planned";
+        const resp2 = await fetch(
+          `${base}?select=${basic}&status=eq.${status}&order=received_at.desc&limit=${limit}`,
+          { headers },
+        );
+        if (!resp2.ok) return send(res, 500, { error: "Query failed" });
+        const rows2 = await resp2.json();
+        return send(res, 200, { ok: true, count: rows2.length, rows: rows2 });
+      }
       const rows = await resp.json();
       return send(res, 200, { ok: true, count: rows.length, rows });
     }
