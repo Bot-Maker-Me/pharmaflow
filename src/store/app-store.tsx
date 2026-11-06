@@ -113,10 +113,10 @@ function loadSettings(): Settings {
 function krollSqlPreviewSvg(input: ManualScriptInput): string {
   const esc = (s: string) =>
     String(s ?? "")
-      .replace(/&/g, "&")
-      .replace(/</g, "<")
-      .replace(/>/g, ">")
-      .replace(/"/g, """);
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   const lines: Array<[string, string]> = [
     ["SOURCE", "Kroll PendingNewRx (SQL agent)"],
     ["PENDING RX", input.pending_rx_id != null ? String(input.pending_rx_id) : "—"],
