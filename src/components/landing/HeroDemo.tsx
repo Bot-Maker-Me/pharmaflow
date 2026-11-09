@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { MouseEvent } from "react";
 
 import { useReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,7 @@ function Check({ className }: { className?: string }) {
 export function HeroDemo() {
   const reduced = useReducedMotion();
   const [tick, setTick] = useState(reduced ? DONE_AT : 0);
+  const tiltRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (reduced) {
@@ -62,6 +64,21 @@ export function HeroDemo() {
   const typed = done ? keystrokes.length : Math.max(0, Math.min(keystrokes.length, tick - PUSH_AT + 1));
   const confidence = Math.round((96 * extracted) / fields.length);
 
+  const progress = Math.min(100, (tick / DONE_AT) * 100);
+
+  const onMove = (e: MouseEvent<HTMLDivElement>) => {
+    const el = tiltRef.current;
+    if (!el || reduced) return;
+    const rect = el.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width - 0.5;
+    const py = (e.clientY - rect.top) / rect.height - 0.5;
+    el.style.transform = `perspective(1400px) rotateX(${(-py * 2.6).toFixed(2)}deg) rotateY(${(px * 3.2).toFixed(2)}deg)`;
+  };
+
+  const onLeave = () => {
+    if (tiltRef.current) tiltRef.current.style.transform = "perspective(1400px) rotateX(0deg) rotateY(0deg)";
+  };
+
   const status = done
     ? "Saved in Kroll"
     : pushing
@@ -72,7 +89,19 @@ export function HeroDemo() {
 
   return (
     <figure className="m-0" aria-label="Demo of a fax becoming a Kroll prescription">
-      <div className="grid border-2 border-pf-ink bg-pf-sheet lg:grid-cols-[1.05fr_1fr_0.82fr]">
+      <div
+        ref={tiltRef}
+        onMouseMove={onMove}
+        onMouseLeave={onLeave}
+        className="relative grid border-2 border-pf-ink bg-pf-sheet transition-transform duration-200 ease-out will-change-transform lg:grid-cols-[1.05fr_1fr_0.82fr]"
+      >
+        {/* Signal line: follows the fax as it moves through the three stages */}
+        <div aria-hidden className="absolute inset-x-0 top-0 z-10 h-1 bg-pf-ink/10">
+          <div
+            className="h-full bg-pf-amber transition-[width] duration-[750ms] ease-linear"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
         {/* 1 — the fax */}
         <section className="border-b-2 border-pf-ink bg-[#F1F2EF] p-5 sm:p-6 lg:border-b-0 lg:border-r-2">
           <div className="flex items-baseline justify-between">
@@ -133,7 +162,10 @@ export function HeroDemo() {
               return (
                 <div
                   key={f.label}
-                  className="flex min-h-[3.1rem] items-center justify-between gap-4 border-b border-pf-rule py-2"
+                  className={cn(
+                    "flex min-h-[3.1rem] items-center justify-between gap-4 border-b border-pf-rule px-1 py-2",
+                    filled && "pf-flash",
+                  )}
                 >
                   <dt className="text-[13px] text-pf-slate">{f.label}</dt>
                   <dd className="m-0 flex items-center gap-2 text-right">
@@ -185,7 +217,13 @@ export function HeroDemo() {
           <div className="mt-4 min-h-[15rem] border border-pf-sheet/15 bg-black/40 p-4 font-data text-[13px] leading-[1.9] text-pf-phosphor">
             <p className="text-pf-sheet/55">New prescription</p>
             {keystrokes.map((k, i) => (
-              <p key={k.key} className={cn("m-0 transition-opacity", i < typed ? "opacity-100" : "opacity-0")}>
+              <p
+                key={k.key}
+                className={cn(
+                  "m-0 transition-all duration-300",
+                  i < typed ? "translate-x-0 opacity-100" : "-translate-x-2 opacity-0",
+                )}
+              >
                 <span className="mr-3 inline-block w-6 text-pf-amber">{k.key}</span>
                 {k.text}
               </p>
