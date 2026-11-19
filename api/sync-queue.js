@@ -15,6 +15,8 @@
 
 import { timingSafeEqual } from "node:crypto";
 
+import { bumpMapping, diffAgainstKroll, insertFeedback, normDin } from "../server/learning.js";
+
 const MAX_BODY_BYTES = 64 * 1024;
 
 function send(res, status, body) {
@@ -55,23 +57,84 @@ function isIsoDate(value) {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
 
+/**
+ * The agent reports what staff actually entered in Kroll for a pending Rx.
+ * Compare it with what the fax scan produced, record every difference as feedback,
+ * and learn which Kroll drug staff pick for a DIN. Re-reports (staff edited the Rx again
+ * later) update the stored corrections instead of duplicating them.
+ */
 async function handleShadowResult(body, cfg, res) {
   const storeId = String(body.store_id || "default").slice(0, 64);
   const id = Number(body.pending_rx_id);
   if (!Number.isSafeInteger(id) || id < 0) return send(res, 400, { error: "pending_rx_id is required" });
   if (!cfg) return send(res, 202, { ok: true, stored: false });
+
+  const rowUrl = `${cfg.url}/rest/v1/agent_sync_queue?store_id=eq.${encodeURIComponent(storeId)}&pending_rx_id=eq.${id}`;
+  const actual = body.actual && typeof body.actual === "object" ? body.actual : null;
   const patch = {
-    actual: body.actual && typeof body.actual === "object" ? body.actual : null,
+    actual,
     field_match: body.field_match && typeof body.field_match === "object" ? body.field_match : null,
     compared_at: new Date().toISOString(),
   };
-  const resp = await fetch(
-    `${cfg.url}/rest/v1/agent_sync_queue?store_id=eq.${encodeURIComponent(storeId)}&pending_rx_id=eq.${id}`,
-    { method: "PATCH", headers: sbHeaders(cfg.key, { Prefer: "return=representation" }), body: JSON.stringify(patch) },
-  );
+
+  let prev = null;
+  let learned = { corrections: 0, mapping: false };
+  try {
+    const got = await fetch(`${rowUrl}&select=pending_rx_id,planned,actual,sig_text`, { headers: sbHeaders(cfg.key) });
+    prev = got.ok ? (await got.json())[0] || null : null;
+    if (prev && actual && Object.keys(actual).length) {
+      const headers = sbHeaders(cfg.key);
+      const { feedback, matches } = diffAgainstKroll(storeId, prev, actual);
+
+      if (feedback.length && (await insertFeedback(cfg, headers, feedback, { upsert: true }))) {
+        learned.corrections = feedback.length;
+      }
+      const nowMatching = Object.keys(matches).filter((path) => matches[path]);
+      if (nowMatching.length) {
+        // Staff changed a field back to what the system had: its old correction is stale.
+        const list = nowMatching.map((p) => `"${p}"`).join(",");
+        await fetch(
+          `${cfg.url}/rest/v1/extraction_feedback?store_id=eq.${encodeURIComponent(storeId)}&source=eq.kroll_staff&pending_rx_id=eq.${id}&field_path=in.(${encodeURIComponent(list)})`,
+          { method: "DELETE", headers: sbHeaders(cfg.key, { Prefer: "return=minimal" }) },
+        ).catch(() => {});
+      }
+
+      const planned = prev.planned && typeof prev.planned === "object" ? prev.planned : {};
+      const din = normDin(planned.ocr_merged?.medications?.[0]?.din);
+      const drugId = actual.rx_drug_id != null ? String(actual.rx_drug_id).trim() : "";
+      const prevDrugId = prev.actual?.rx_drug_id != null ? String(prev.actual.rx_drug_id).trim() : "";
+      if (/^\d{8}$/.test(din) && drugId && drugId !== prevDrugId) {
+        learned.mapping = await bumpMapping(cfg, headers, {
+          store_id: storeId,
+          kind: "din_to_kroll_drug",
+          source_key: din,
+          target_value: drugId,
+        });
+      }
+
+      const suggested = planned.learning?.suggested_drug_id;
+      patch.planned = {
+        ...planned,
+        learning: {
+          ...(planned.learning || {}),
+          corrections: learned.corrections,
+          ...(suggested != null && drugId ? { suggestion_correct: String(suggested) === drugId } : {}),
+        },
+      };
+    }
+  } catch (err) {
+    // Learning must never lose the comparison itself.
+    console.error("[sync-queue] learn from kroll failed:", err?.message || err);
+  }
+
+  const resp = await fetch(rowUrl, {
+    method: "PATCH",
+    headers: sbHeaders(cfg.key, { Prefer: "return=representation" }),
+    body: JSON.stringify(patch),
+  });
   if (!resp.ok) return send(res, 500, { error: "Failed to store comparison" });
   const rows = await resp.json();
-  return send(res, rows.length ? 200 : 404, { ok: rows.length > 0, updated: rows.length });
+  return send(res, rows.length ? 200 : 404, { ok: rows.length > 0, updated: rows.length, learned });
 }
 
 async function handleHeartbeat(body, cfg, res) {

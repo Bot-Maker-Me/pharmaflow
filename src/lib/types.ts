@@ -143,7 +143,7 @@ export const DEFAULT_SETTINGS: Settings = {
   helperToken: "",
   apiBaseUrl: "",
   apiToken: "",
-  extractionMode: "demo",
+  extractionMode: "live",
   autoAdvance: true,
   highThreshold: 0.9,
   mediumThreshold: 0.7,

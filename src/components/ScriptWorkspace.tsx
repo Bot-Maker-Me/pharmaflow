@@ -26,7 +26,7 @@ export function ScriptWorkspace({
   const { updatePatient, updatePrescriber, updateScript, addMedication, removeMedication } = useAppStore();
 
   const level = scriptLevel(script);
-  const issues = scriptIssues(script);
+  const issues = [...scriptIssues(script), ...(script.flags ?? [])];
   const statusMeta = STATUS_STYLES[script.status];
 
   return (

@@ -1,4 +1,5 @@
 import { Bot, Code2, MonitorSmartphone, PlugZap, RotateCcw, ShieldCheck, Terminal } from "lucide-react";
+import * as React from "react";
 import { toast } from "sonner";
 
 import { HelperStatus } from "@/components/HelperStatus";
@@ -27,6 +28,30 @@ import type { PmsId } from "@/lib/types";
 export default function Settings() {
   const { settings, updateSettings, checkHelper, resetQueue, helperStatus, helperInfo, scripts } =
     useAppStore();
+
+  const [testing, setTesting] = React.useState(false);
+
+  /** Calls GET /api/extract: checks the access token, the Anthropic key and the model in one go. */
+  const testExtraction = async () => {
+    setTesting(true);
+    try {
+      const resp = await fetch(`${settings.apiBaseUrl.replace(/\/$/, "")}/api/extract`, {
+        headers: settings.apiToken ? { "x-access-token": settings.apiToken } : {},
+      });
+      const body = (await resp.json().catch(() => ({}))) as { ok?: boolean; model?: string; error?: string };
+      if (resp.status === 401) {
+        toast.error("Access token does not match EXTRACT_ACCESS_TOKEN in Vercel.");
+      } else if (resp.ok && body.ok) {
+        toast.success(`Live extraction works (model ${body.model}).`);
+      } else {
+        toast.error(body.error || `Extraction endpoint returned ${resp.status}`, { duration: 15000 });
+      }
+    } catch {
+      toast.error("Could not reach /api/extract. Check the API base URL.");
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const samplePayload = scripts.length
     ? buildHelperPayloads(scripts[0], settings.pms)[0]
@@ -251,14 +276,14 @@ export default function Settings() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="demo">Demo generator (offline)</SelectItem>
-                  <SelectItem value="live">Live endpoint (Claude 3.5 / GPT-4o Vision)</SelectItem>
+                  <SelectItem value="demo">Demo (FAKE sample data, offline)</SelectItem>
+                  <SelectItem value="live">Live (Claude Vision reads the fax)</SelectItem>
                 </SelectContent>
               </Select>
               <p className="mt-1.5 text-[11px] text-muted-foreground">
                 {settings.extractionMode === "live"
-                  ? "Page images are POSTed to /api/extract. Failures fall back to the demo generator."
-                  : "Deterministic sample data — no API credentials required."}
+                  ? "Page images are POSTed to /api/extract. If it fails you get the real error; fake data is never substituted."
+                  : "Sample data that is NOT read from your fax. Use only for demos."}
               </p>
             </div>
             <div>
@@ -288,6 +313,16 @@ export default function Settings() {
                 Must equal the <span className="font-mono">EXTRACT_ACCESS_TOKEN</span> Vercel variable. Needed
                 for Live extraction.
               </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-2"
+                disabled={testing}
+                onClick={() => void testExtraction()}
+              >
+                {testing ? "Testing…" : "Test connection"}
+              </Button>
             </div>
           </div>
 

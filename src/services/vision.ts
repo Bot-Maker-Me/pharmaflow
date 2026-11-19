@@ -55,7 +55,10 @@ export interface VisionScript {
 export interface ExtractionOutcome {
   scripts: Script[];
   source: "live" | "demo";
+  /** Non-fatal notice (e.g. demo mode is on). */
   warning?: string;
+  /** Live extraction failed. No scripts are produced: fake data is never substituted for a real fax. */
+  error?: string;
 }
 
 function round2(value: number): number {
@@ -149,7 +152,26 @@ function mapWireScript(
   return script;
 }
 
-const PAGES_PER_REQUEST = 3;
+const PAGES_PER_REQUEST = 2;
+
+/** Turn a failed /api/extract response into a message the user can act on. */
+async function describeFailure(response: Response): Promise<string> {
+  let detail = "";
+  try {
+    const body = (await response.json()) as { error?: string };
+    detail = body?.error ?? "";
+  } catch {
+    /* non-JSON body */
+  }
+  if (response.status === 401) {
+    return "Wrong or missing API access token. Settings → API access token must equal EXTRACT_ACCESS_TOKEN in Vercel.";
+  }
+  if (response.status === 404) {
+    return "The /api/extract endpoint was not found. Check Settings → API base URL (leave it blank on Vercel).";
+  }
+  if (response.status === 413) return detail || "The scan is too large to send. Try fewer pages.";
+  return detail || `Extraction endpoint returned ${response.status}`;
+}
 
 export async function requestExtraction(
   document: ProcessedDocument,
@@ -177,7 +199,11 @@ export async function requestExtraction(
         extractionSnapshot: withLearn.extractionSnapshot ?? snapshotFromScript(withLearn),
       };
     });
-    return { scripts, source: "demo" };
+    return {
+      scripts,
+      source: "demo",
+      warning: "Demo mode is ON: this is sample data, NOT read from your fax. Switch to Live in Settings.",
+    };
   }
 
   try {
@@ -203,8 +229,7 @@ export async function requestExtraction(
         }),
       });
 
-      if (response.status === 401) throw new Error("Wrong or missing API access token (Settings)");
-      if (!response.ok) throw new Error(`Extraction endpoint returned ${response.status}`);
+      if (!response.ok) throw new Error(await describeFailure(response));
 
       const data = (await response.json()) as { scripts?: VisionScript[] };
       for (const wire of data.scripts ?? []) {
@@ -228,20 +253,6 @@ export async function requestExtraction(
 
     return { scripts, source: "live" };
   } catch (error) {
-    const scripts = createSyntheticExtraction(document).map((s) => {
-      const withLearn = applyLearnedToScript({
-        ...s,
-        medications: s.medications.map((m) => applyLearnedToMedication(m)),
-      });
-      return {
-        ...withLearn,
-        extractionSnapshot: withLearn.extractionSnapshot ?? snapshotFromScript(withLearn),
-      };
-    });
-    return {
-      scripts,
-      source: "demo",
-      warning: `Live extraction unavailable (${(error as Error).message}). Showing DEMO data — do not use it for real patients.`,
-    };
+    return { scripts: [], source: "live", error: (error as Error).message };
   }
 }

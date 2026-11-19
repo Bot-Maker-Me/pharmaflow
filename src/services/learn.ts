@@ -30,8 +30,32 @@ export type LearnedMapping = {
 
 const LOCAL_KEY = "pharmflow.learned.v1";
 
-/** Prefer mappings seen at least this many times (1 = apply on first confirmation). */
-const MIN_HITS_APPLY = 1;
+/**
+ * Safety model (pharmacy) — keep in sync with server/learning.js:
+ *  - AUTO-APPLIED: DIN -> drug name / strength (a DIN identifies the product), and patient /
+ *    prescriber name spellings once confirmed MIN_HITS_REWRITE times.
+ *  - FLAG ONLY: drug name, strength, quantity, refills, sig, DIN text. A single correction never
+ *    silently rewrites a clinical value; the technician sees "staff changed this before".
+ */
+const MIN_HITS_REWRITE = 2;
+const AUTO_REWRITE_PATHS = ["patient.full_name", "prescriber.name", "prescriber.license_number"];
+const FLAG_ONLY_FIELDS = ["drug_name", "strength", "sig", "quantity", "refills", "din"] as const;
+type FlagField = (typeof FLAG_ONLY_FIELDS)[number];
+
+function canonicalPath(path: string): string {
+  const m = /^medications\[\d+\]\.(\w+)$/.exec(path);
+  if (m) return m[1] === "qty" ? "quantity" : m[1];
+  return path;
+}
+
+const FIELD_LABEL: Record<FlagField, string> = {
+  drug_name: "drug name",
+  strength: "strength",
+  sig: "directions (sig)",
+  quantity: "quantity",
+  refills: "refills",
+  din: "DIN",
+};
 
 export function snapshotFromScript(script: Script): ExtractionSnapshot {
   return {
@@ -106,10 +130,6 @@ function saveLocalMappings(mappings: LearnedMapping[]) {
   }
 }
 
-function usable(m: LearnedMapping): boolean {
-  return (m.hit_count ?? 1) >= MIN_HITS_APPLY;
-}
-
 function normText(v: string): string {
   return String(v ?? "")
     .trim()
@@ -135,148 +155,111 @@ export function getLearnedMappings(): LearnedMapping[] {
 }
 
 /**
- * Auto-apply learned corrections to a medication from the latest extract.
- * - din_to_drug / din_to_strength: fill empty, or overwrite when hits >= 2
- * - text_replace: if model repeated the same wrong value, swap to staff correction
- * - quantity / refills text_replace supported
+ * Auto-apply identity-safe learned mappings to a medication: DIN -> drug name / strength.
+ * Fills an empty field right away; overwrites an existing value only once the mapping has been
+ * confirmed MIN_HITS_REWRITE times. Everything else is surfaced as a flag (learnedFlags).
  */
 export function applyLearnedToMedication(med: Medication, mappings?: LearnedMapping[]): Medication {
-  const list = (mappings ?? loadLocalMappings()).filter(usable);
+  const list = mappings ?? loadLocalMappings();
   const din = (med.din || "").replace(/\D/g, "");
   const key8 = din.length === 7 ? din.padStart(8, "0") : din.length >= 8 ? din.slice(-8) : "";
-  let next = { ...med };
-  let applied = 0;
+  if (!key8) return med;
+  const next = { ...med };
 
   for (const m of list) {
-    if (m.kind === "din_to_drug" && key8 && (m.source_key === key8 || m.source_key === din)) {
-      if (!next.drug_name.trim() || (m.hit_count || 0) >= 2) {
-        if (next.drug_name !== m.target_value) {
-          next.drug_name = m.target_value;
-          applied += 1;
-        }
-      }
-    }
-    if (m.kind === "din_to_strength" && key8 && (m.source_key === key8 || m.source_key === din)) {
-      if (!next.strength.trim() || (m.hit_count || 0) >= 2) {
-        if (next.strength !== m.target_value) {
-          next.strength = m.target_value;
-          applied += 1;
-        }
-      }
-    }
-  }
-
-  for (const m of list) {
-    if (m.kind !== "text_replace") continue;
-    const sep = m.source_key.indexOf("::");
-    if (sep < 0) continue;
-    const path = m.source_key.slice(0, sep);
-    const original = m.source_key.slice(sep + 2);
-    const o = normText(original);
-    if (!path || !o) continue;
-
-    if (path.includes("drug_name") && normText(next.drug_name) === o) {
+    if (m.source_key !== key8) continue;
+    const hits = m.hit_count ?? 1;
+    if (m.kind === "din_to_drug" && (!next.drug_name.trim() || hits >= MIN_HITS_REWRITE)) {
       next.drug_name = m.target_value;
-      applied += 1;
     }
-    if ((path.includes(".sig") || path.endsWith("sig")) && normText(next.sig) === o) {
-      next.sig = m.target_value;
-      applied += 1;
-    }
-    if (path.includes("strength") && normText(next.strength) === o) {
+    if (m.kind === "din_to_strength" && (!next.strength.trim() || hits >= MIN_HITS_REWRITE)) {
       next.strength = m.target_value;
-      applied += 1;
     }
-    if (path.includes("quantity") || path.includes(".qty")) {
-      if (normText(String(next.quantity)) === o || String(next.quantity) === original) {
-        const n = Number(m.target_value);
-        if (Number.isFinite(n)) {
-          next.quantity = n;
-          applied += 1;
-        }
-      }
-    }
-    if (path.includes("refills")) {
-      if (normText(String(next.refills)) === o || String(next.refills) === original) {
-        const n = Number(m.target_value);
-        if (Number.isFinite(n)) {
-          next.refills = Math.trunc(n);
-          applied += 1;
-        }
-      }
-    }
-    if (path.includes(".din") && normText(next.din) === o) {
-      next.din = m.target_value.replace(/\D/g, "").slice(-8);
-      applied += 1;
-    }
-  }
-
-  if (applied > 0) {
-    next = {
-      ...next,
-      // Soft signal that learning touched this row (UI may ignore unknown keys)
-      field_scores: {
-        ...next.field_scores,
-        drug_name: next.field_scores?.drug_name ?? next.confidence,
-        din: next.field_scores?.din ?? next.confidence,
-        strength: next.field_scores?.strength ?? next.confidence,
-        quantity: next.field_scores?.quantity ?? next.confidence,
-        refills: next.field_scores?.refills ?? next.confidence,
-        sig: next.field_scores?.sig ?? next.confidence,
-      },
-    };
   }
   return next;
 }
 
-/** Apply patient / prescriber / med mappings to a full script after extract. */
-export function applyLearnedToScript(script: Script, mappings?: LearnedMapping[]): Script {
-  const list = (mappings ?? loadLocalMappings()).filter(usable);
-  let patient = { ...script.patient };
-  let prescriber = { ...script.prescriber };
-
+/** "Staff changed this before" warnings for values the model just repeated. Never rewrites anything. */
+export function learnedFlags(script: Script, mappings?: LearnedMapping[]): string[] {
+  const list = mappings ?? loadLocalMappings();
+  const flags = new Set<string>();
   for (const m of list) {
     if (m.kind !== "text_replace") continue;
     const sep = m.source_key.indexOf("::");
     if (sep < 0) continue;
-    const path = m.source_key.slice(0, sep);
+    const field = canonicalPath(m.source_key.slice(0, sep));
+    if (!(FLAG_ONLY_FIELDS as readonly string[]).includes(field)) continue;
     const original = normText(m.source_key.slice(sep + 2));
-    if (!path || !original) continue;
+    if (!original) continue;
+    for (const med of script.medications) {
+      const current = normText(String((med as unknown as Record<string, unknown>)[field === "quantity" ? "quantity" : field] ?? ""));
+      if (current === original && normText(m.target_value) !== current) {
+        flags.add(
+          `Staff previously changed ${FIELD_LABEL[field as FlagField]} "${original}" to "${m.target_value}" for a similar scan. Check the fax and confirm which is correct.`,
+        );
+      }
+    }
+  }
+  return Array.from(flags);
+}
 
-    if (path.includes("patient.full_name") && normText(patient.full_name) === original) {
-      patient.full_name = m.target_value;
-    }
-    if (path.includes("patient.dob") && normText(patient.dob) === original) {
-      patient.dob = m.target_value;
-    }
-    if (path.includes("health_card") && normText(patient.health_card_num) === original) {
-      patient.health_card_num = m.target_value;
-    }
-    if (path.includes("prescriber.name") && normText(prescriber.name) === original) {
-      prescriber.name = m.target_value;
-    }
-    if (path.includes("license") && normText(prescriber.license_number) === original) {
+/** Apply learned mappings to a full script after extraction. */
+export function applyLearnedToScript(script: Script, mappings?: LearnedMapping[]): Script {
+  const list = mappings ?? loadLocalMappings();
+  const patient = { ...script.patient };
+  const prescriber = { ...script.prescriber };
+
+  for (const m of list) {
+    if (m.kind !== "text_replace" || (m.hit_count ?? 1) < MIN_HITS_REWRITE) continue;
+    const sep = m.source_key.indexOf("::");
+    if (sep < 0) continue;
+    const path = m.source_key.slice(0, sep);
+    if (!AUTO_REWRITE_PATHS.includes(path)) continue;
+    const original = normText(m.source_key.slice(sep + 2));
+    if (!original) continue;
+
+    if (path === "patient.full_name" && normText(patient.full_name) === original) patient.full_name = m.target_value;
+    else if (path === "prescriber.name" && normText(prescriber.name) === original) prescriber.name = m.target_value;
+    else if (path === "prescriber.license_number" && normText(prescriber.license_number) === original) {
       prescriber.license_number = m.target_value;
     }
   }
 
-  for (const m of list) {
-    if (m.kind !== "health_card_example") continue;
-    if (!patient.health_card_num.trim() && m.target_value) {
-      // only fill when empty — example is weak signal
-      // skip auto-fill of health card from name alone to avoid wrong patient ID
-    }
-  }
-
   const medications = script.medications.map((med) => applyLearnedToMedication(med, list));
-
-  return {
+  const next: Script = {
     ...script,
     patient,
     prescriber,
     medications,
     dinVerifiedCount: medications.filter((med) => med.din_status === "verified").length,
   };
+  next.flags = Array.from(new Set([...(script.flags ?? []), ...learnedFlags(next, list)]));
+  return next;
+}
+
+/** Local mapping equivalents of what the server infers (same safety rules). */
+function localMappingsFromCorrections(corrections: FieldCorrection[]): LearnedMapping[] {
+  const out: LearnedMapping[] = [];
+  for (const c of corrections) {
+    if (c.field_path.endsWith(".din") && c.context?.drug_name) {
+      const din = c.corrected_value.replace(/\D/g, "").slice(-8);
+      if (din) out.push({ kind: "din_to_drug", source_key: din, target_value: c.context.drug_name, hit_count: 1 });
+      if (din && c.context.strength) {
+        out.push({ kind: "din_to_strength", source_key: din, target_value: c.context.strength, hit_count: 1 });
+      }
+    }
+    const canon = canonicalPath(c.field_path);
+    const learnable = AUTO_REWRITE_PATHS.includes(canon) || (FLAG_ONLY_FIELDS as readonly string[]).includes(canon);
+    if (learnable && c.original_value && c.corrected_value && c.original_value !== c.corrected_value) {
+      out.push({
+        kind: "text_replace",
+        source_key: `${c.field_path}::${c.original_value}`.slice(0, 240),
+        target_value: c.corrected_value,
+        hit_count: 1,
+      });
+    }
+  }
+  return out;
 }
 
 export async function submitCorrections(
@@ -303,36 +286,10 @@ export async function submitCorrections(
     if (!resp.ok) return { ok: false };
     const data = (await resp.json()) as { saved?: number };
 
-    const localAdds: LearnedMapping[] = [];
-    for (const c of payload.corrections) {
-      if (c.field_path.endsWith(".din") && c.context?.drug_name) {
-        const din = c.corrected_value.replace(/\D/g, "").slice(-8);
-        if (din) localAdds.push({ kind: "din_to_drug", source_key: din, target_value: c.context.drug_name, hit_count: 1 });
-      }
-      if (c.field_path.endsWith(".din") && c.context?.strength) {
-        const din = c.corrected_value.replace(/\D/g, "").slice(-8);
-        if (din) localAdds.push({ kind: "din_to_strength", source_key: din, target_value: c.context.strength, hit_count: 1 });
-      }
-      if (c.original_value && c.corrected_value && c.original_value !== c.corrected_value) {
-        localAdds.push({
-          kind: "text_replace",
-          source_key: `${c.field_path}::${c.original_value}`.slice(0, 240),
-          target_value: c.corrected_value,
-          hit_count: 1,
-        });
-      }
-    }
-    mergeLearnedMappings(localAdds);
+    mergeLearnedMappings(localMappingsFromCorrections(payload.corrections));
     return { ok: true, saved: data.saved ?? payload.corrections.length };
   } catch {
-    mergeLearnedMappings(
-      payload.corrections.map((c) => ({
-        kind: "text_replace",
-        source_key: `${c.field_path}::${c.original_value}`.slice(0, 240),
-        target_value: c.corrected_value,
-        hit_count: 1,
-      })),
-    );
+    mergeLearnedMappings(localMappingsFromCorrections(payload.corrections));
     return { ok: true, saved: payload.corrections.length };
   }
 }
@@ -353,14 +310,19 @@ export async function refreshLearnedMappings(settings: Settings, storeId = "defa
   }
 }
 
-/** Compact few-shot lines for the vision system (no full PHI dumps). */
+/** Compact, non-PHI hint lines for the vision model (drug identity only, never names/DOB/cards). */
 export function fewShotHintsFromMappings(limit = 12): string[] {
-  return loadLocalMappings()
-    .filter((m) => m.kind === "text_replace" || m.kind === "din_to_drug")
-    .slice(0, limit)
-    .map((m) => {
-      if (m.kind === "din_to_drug") return `DIN ${m.source_key} → drug "${m.target_value}"`;
-      const parts = m.source_key.split("::");
-      return `When ${parts[0]} was "${parts[1] ?? ""}" staff corrected to "${m.target_value}"`;
-    });
+  const out: string[] = [];
+  for (const m of loadLocalMappings()) {
+    if (out.length >= limit) break;
+    if (m.kind === "din_to_drug") {
+      out.push(`DIN ${m.source_key} is "${m.target_value}"`);
+    } else if (m.kind === "text_replace") {
+      const [path, original] = m.source_key.split("::");
+      if (canonicalPath(path ?? "") === "drug_name" && original) {
+        out.push(`Staff corrected drug name "${original}" to "${m.target_value}"`);
+      }
+    }
+  }
+  return out;
 }

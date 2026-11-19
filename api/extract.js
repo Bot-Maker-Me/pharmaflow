@@ -13,10 +13,11 @@
 
 import { timingSafeEqual } from "node:crypto";
 
+import { MIN_HITS_REWRITE, isAutoRewritePath, normDin, normText } from "../server/learning.js";
+
 const MAX_PAGES = 8;
 const MAX_IMAGE_CHARS = 3_200_000;
 const DEFAULT_MODEL = "claude-sonnet-5-5";
-const MIN_HITS = 1;
 
 const SYSTEM_PROMPT = `You are a licensed-pharmacy intake assistant for Canadian pharmacies.
 You are given scanned faxed prescription pages. Extract every prescription carefully.
@@ -175,19 +176,19 @@ async function loadMappings(storeId) {
     });
     if (!resp.ok) return [];
     const rows = await resp.json();
-    return Array.isArray(rows) ? rows.filter((m) => (m.hit_count ?? 1) >= MIN_HITS) : [];
+    return Array.isArray(rows) ? rows : [];
   } catch {
     return [];
   }
 }
 
-function normText(v) {
-  return String(v ?? "")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-/** Auto-apply staff/shadow learned mappings onto a sanitised script. */
+/**
+ * Auto-apply only identity-safe learned mappings (see server/learning.js for the safety model).
+ *   - din_to_drug / din_to_strength: a DIN identifies the product. Fill when empty; overwrite
+ *     only after the mapping was confirmed MIN_HITS_REWRITE times.
+ *   - text_replace on patient/prescriber name + licence: exact-string spelling fixes, >= MIN_HITS_REWRITE.
+ * Quantity, refills, sig, drug name and strength are NEVER rewritten here; the client flags them.
+ */
 function applyMappingsToScript(script, mappings) {
   if (!mappings.length) return { script, applied: 0 };
   let applied = 0;
@@ -196,106 +197,103 @@ function applyMappingsToScript(script, mappings) {
   const medications = script.medications.map((med) => ({ ...med }));
 
   for (const m of mappings) {
+    const hits = m.hit_count || 0;
     if (m.kind === "din_to_drug" || m.kind === "din_to_strength") {
       for (const med of medications) {
-        const din = (med.din || "").replace(/\D/g, "");
-        const key8 = din.length === 7 ? din.padStart(8, "0") : din.slice(-8);
-        if (m.source_key !== key8 && m.source_key !== din) continue;
-        if (m.kind === "din_to_drug" && (!med.drug_name || (m.hit_count || 0) >= 2)) {
-          if (med.drug_name !== m.target_value) {
-            med.drug_name = m.target_value;
-            applied += 1;
-          }
-        }
-        if (m.kind === "din_to_strength" && (!med.strength || (m.hit_count || 0) >= 2)) {
-          if (med.strength !== m.target_value) {
-            med.strength = m.target_value;
-            applied += 1;
-          }
+        const key8 = normDin(med.din);
+        if (!key8 || m.source_key !== key8) continue;
+        const field = m.kind === "din_to_drug" ? "drug_name" : "strength";
+        if ((!med[field] || hits >= MIN_HITS_REWRITE) && med[field] !== m.target_value) {
+          med[field] = m.target_value;
+          applied += 1;
         }
       }
+      continue;
     }
 
-    if (m.kind !== "text_replace") continue;
+    if (m.kind !== "text_replace" || hits < MIN_HITS_REWRITE) continue;
     const sep = String(m.source_key).indexOf("::");
     if (sep < 0) continue;
     const path = m.source_key.slice(0, sep);
     const original = normText(m.source_key.slice(sep + 2));
-    if (!path || !original) continue;
+    if (!original || !isAutoRewritePath(path)) continue;
 
-    if (path.includes("patient.full_name") && normText(patient.full_name) === original) {
+    if (path === "patient.full_name" && normText(patient.full_name) === original) {
       patient.full_name = m.target_value;
       applied += 1;
-    }
-    if (path.includes("patient.dob") && normText(patient.dob) === original) {
-      patient.dob = m.target_value;
-      applied += 1;
-    }
-    if (path.includes("health_card") && normText(patient.health_card_num) === original) {
-      patient.health_card_num = m.target_value;
-      applied += 1;
-    }
-    if (path.includes("prescriber.name") && normText(prescriber.name) === original) {
+    } else if (path === "prescriber.name" && normText(prescriber.name) === original) {
       prescriber.name = m.target_value;
       applied += 1;
-    }
-    if (path.includes("license") && normText(prescriber.license_number) === original) {
+    } else if (path === "prescriber.license_number" && normText(prescriber.license_number) === original) {
       prescriber.license_number = m.target_value;
       applied += 1;
     }
-
-    for (const med of medications) {
-      if (path.includes("drug_name") && normText(med.drug_name) === original) {
-        med.drug_name = m.target_value;
-        applied += 1;
-      }
-      if ((path.includes(".sig") || path.endsWith("sig")) && normText(med.sig) === original) {
-        med.sig = m.target_value;
-        applied += 1;
-      }
-      if (path.includes("strength") && normText(med.strength) === original) {
-        med.strength = m.target_value;
-        applied += 1;
-      }
-      if ((path.includes("quantity") || path.includes(".qty")) && normText(String(med.quantity)) === original) {
-        const n = Number(m.target_value);
-        if (Number.isFinite(n)) {
-          med.quantity = n;
-          applied += 1;
-        }
-      }
-      if (path.includes("refills") && normText(String(med.refills)) === original) {
-        const n = Number(m.target_value);
-        if (Number.isFinite(n)) {
-          med.refills = Math.trunc(n);
-          applied += 1;
-        }
-      }
-      if (path.includes(".din") && normText(med.din) === original) {
-        med.din = String(m.target_value).replace(/\D/g, "").slice(-8);
-        applied += 1;
-      }
-    }
   }
 
-  return {
-    script: { ...script, patient, prescriber, medications },
-    applied,
-  };
+  return { script: { ...script, patient, prescriber, medications }, applied };
+}
+
+/** Non-PHI hints built server-side so learning works even when the browser cache is empty. */
+function hintsFromMappings(mappings, limit = 12) {
+  const out = [];
+  for (const m of mappings) {
+    if (out.length >= limit) break;
+    if (m.kind === "din_to_drug" && (m.hit_count || 0) >= 1) {
+      out.push(`DIN ${m.source_key} is "${m.target_value}"`);
+    } else if (m.kind === "text_replace" && /(^|\.)drug_name$/.test(String(m.source_key).split("::")[0])) {
+      const original = String(m.source_key).split("::")[1] || "";
+      if (original) out.push(`Staff corrected drug name "${original}" to "${m.target_value}"`);
+    }
+  }
+  return out;
+}
+
+/** Anthropic error bodies describe the request, never the image, so they are safe to show the user. */
+async function anthropicError(resp) {
+  let msg = "";
+  try {
+    const body = await resp.json();
+    msg = body?.error?.message || "";
+  } catch {
+    /* ignore */
+  }
+  if (resp.status === 401) return "Anthropic rejected ANTHROPIC_API_KEY (invalid or revoked). Check the key in Vercel.";
+  if (resp.status === 404) return `Model not found. Set EXTRACT_MODEL in Vercel to a model your key can use. ${msg}`.trim();
+  if (resp.status === 429) return "Anthropic rate limit or no credit left on the account. Check billing at console.anthropic.com.";
+  return `Anthropic returned ${resp.status}${msg ? `: ${msg}` : ""}`;
 }
 
 export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return send(res, 405, { error: "Method not allowed" });
+  if (req.method !== "POST" && req.method !== "GET") return send(res, 405, { error: "Method not allowed" });
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const accessToken = process.env.EXTRACT_ACCESS_TOKEN;
-  if (!apiKey || !accessToken || accessToken.length < 16) {
-    return send(res, 503, { error: "Extraction is not configured (ANTHROPIC_API_KEY / EXTRACT_ACCESS_TOKEN)" });
+  if (!accessToken || accessToken.length < 16) {
+    return send(res, 503, { error: "EXTRACT_ACCESS_TOKEN is missing or shorter than 16 characters in Vercel." });
   }
   if (!keyMatches(req.headers["x-access-token"], accessToken)) {
     return send(res, 401, { error: "Unauthorized" });
+  }
+  if (!apiKey) {
+    return send(res, 503, { error: "ANTHROPIC_API_KEY is not set in Vercel (add it, then redeploy)." });
+  }
+
+  // Connection test used by Settings -> "Test connection". Verifies key + model with a 1-token call.
+  if (req.method === "GET") {
+    const model = process.env.EXTRACT_MODEL || DEFAULT_MODEL;
+    try {
+      const ping = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: "user", content: "ping" }] }),
+      });
+      if (!ping.ok) return send(res, 502, { ok: false, model, error: await anthropicError(ping) });
+      return send(res, 200, { ok: true, model, supabase: Boolean(supabaseConfig()) });
+    } catch (err) {
+      return send(res, 502, { ok: false, model, error: `Could not reach Anthropic: ${err?.message || err}` });
+    }
   }
 
   let body = req.body;
@@ -326,11 +324,15 @@ export default async function handler(req, res) {
     content.push({ type: "image", source: { type: "base64", ...image } });
   }
 
+  const model = process.env.EXTRACT_MODEL || DEFAULT_MODEL;
+  const mappings = await loadMappings(storeId);
+  const hints = Array.from(new Set([...hintsFromMappings(mappings), ...clientHints])).slice(0, 20);
+
   let hintBlock = "";
-  if (clientHints.length) {
+  if (hints.length) {
     hintBlock =
-      "\n\nPrior staff corrections for this store (prefer these when the image matches):\n" +
-      clientHints.map((h) => `- ${h}`).join("\n");
+      "\n\nPrior staff corrections for this store (use as spelling/identity hints only when the image matches; never override what is printed):\n" +
+      hints.map((h) => `- ${h}`).join("\n");
   }
 
   content.push({
@@ -339,9 +341,6 @@ export default async function handler(req, res) {
       "Extract all prescriptions. Prioritise accurate drug_name, DIN, strength, quantity, sig, patient health_card_num, and prescriber licence. Return the JSON object only." +
       hintBlock,
   });
-
-  const model = process.env.EXTRACT_MODEL || DEFAULT_MODEL;
-  const mappings = await loadMappings(storeId);
 
   try {
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
@@ -362,12 +361,17 @@ export default async function handler(req, res) {
 
     if (!resp.ok) {
       console.error("[extract] anthropic error", resp.status);
-      return send(res, 502, { error: `Vision model returned ${resp.status}` });
+      return send(res, 502, { error: await anthropicError(resp) });
     }
 
     const data = await resp.json();
     const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-    const parsed = extractJson(text);
+    let parsed;
+    try {
+      parsed = extractJson(text);
+    } catch {
+      return send(res, 502, { error: "The model did not return readable JSON for this page. Try again or rescan at higher quality." });
+    }
     let learnApplied = 0;
     const scripts = (Array.isArray(parsed.scripts) ? parsed.scripts : [])
       .map(sanitiseScript)

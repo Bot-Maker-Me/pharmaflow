@@ -10,8 +10,10 @@ import { loadPdfDocument } from "./pdf";
  * pages fit inside Vercel's 4.5 MB request limit.
  */
 
-const MAX_EDGE = 1568;
-const MAX_PAGE_CHARS = 1_100_000; // ~800 KB of JPEG per page
+// Fax pages are small print (DINs, health cards). 1568px blurred them; 2000px keeps digits legible
+// while 2 pages/request (see vision.ts) still fit inside Vercel's 4.5 MB request limit.
+const MAX_EDGE = 2000;
+const MAX_PAGE_CHARS = 1_500_000; // ~1.1 MB of JPEG per page
 
 function canvasToJpeg(canvas: HTMLCanvasElement): string {
   for (const quality of [0.85, 0.7, 0.55, 0.4]) {

@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514";
+const MODEL = process.env.EXTRACT_MODEL || process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5";
 
 function send(res, status, body) {
   res.statusCode = status;
@@ -119,6 +119,25 @@ function mergeSqlAndOcr(body, ocrScript) {
   };
 }
 
+/** What Kroll drug did staff pick last time for this DIN? Only trusted after 2+ confirmations. */
+async function learnedKrollDrug(cfg, storeId, din) {
+  if (!cfg || !/^\d{8}$/.test(din || "")) return null;
+  try {
+    const q = new URLSearchParams({
+      store_id: `eq.${storeId}`,
+      kind: "eq.din_to_kroll_drug",
+      source_key: `eq.${din}`,
+      select: "target_value,hit_count",
+    });
+    const resp = await fetch(`${cfg.url}/rest/v1/learned_mappings?${q}`, { headers: sbHeaders(cfg.key) });
+    if (!resp.ok) return null;
+    const row = (await resp.json())[0];
+    return row && (row.hit_count || 0) >= 2 ? { drug_id: String(row.target_value), hits: row.hit_count } : null;
+  } catch {
+    return null;
+  }
+}
+
 async function uploadImage(cfg, storeId, pendingRxId, dataUrl) {
   const parsed = parseDataUrl(dataUrl);
   if (!parsed) return null;
@@ -170,6 +189,7 @@ export default async function handler(req, res) {
     if (cfg) pageImageUrl = await uploadImage(cfg, storeId, pendingRxId, pageImages[0]);
   }
   const merged = mergeSqlAndOcr(body, ocr.scripts[0]);
+  const suggestion = await learnedKrollDrug(cfg, storeId, merged.medications[0]?.din);
   const row = {
     store_id: storeId,
     pending_rx_id: pendingRxId,
@@ -197,6 +217,7 @@ export default async function handler(req, res) {
       ...(body.decision?.planned && typeof body.decision.planned === "object" ? body.decision.planned : {}),
       ocr_merged: merged,
       ocr_error: ocr.error || null,
+      ...(suggestion ? { learning: { suggested_drug_id: suggestion.drug_id, suggestion_hits: suggestion.hits } } : {}),
     },
     page_image_url: pageImageUrl,
     ocr_din: merged.medications[0]?.din || null,
