@@ -11,6 +11,8 @@
 
 import { timingSafeEqual } from "node:crypto";
 
+import { bumpMapping, inferMappings, insertFeedback, str } from "../server/learning.js";
+
 const MAX_CORRECTIONS = 40;
 
 function send(res, status, body) {
@@ -40,100 +42,6 @@ function sbHeaders(key, extra = {}) {
     "Content-Type": "application/json",
     ...extra,
   };
-}
-
-function str(v, max = 500) {
-  if (v == null) return "";
-  return String(v).slice(0, max);
-}
-
-function inferMappings(storeId, corrections) {
-  const out = [];
-  for (const c of corrections) {
-    const path = str(c.field_path, 120);
-    const original = str(c.original_value, 400);
-    const corrected = str(c.corrected_value, 400);
-    if (!path || !corrected || original === corrected) continue;
-
-    if (path.endsWith(".din") && /^\d{7,8}$/.test(corrected.replace(/\D/g, ""))) {
-      const din = corrected.replace(/\D/g, "").slice(-8).padStart(8, "0");
-      const ctx = c.context && typeof c.context === "object" ? c.context : {};
-      if (ctx.drug_name) {
-        out.push({ store_id: storeId, kind: "din_to_drug", source_key: din, target_value: str(ctx.drug_name, 200) });
-      }
-      if (ctx.strength) {
-        out.push({ store_id: storeId, kind: "din_to_strength", source_key: din, target_value: str(ctx.strength, 80) });
-      }
-    }
-
-    // SHADOW staff: wrong internal drug id → staff's drug id
-    if (path.endsWith(".drug_id") && original && corrected) {
-      out.push({
-        store_id: storeId,
-        kind: "drug_id_replace",
-        source_key: original.slice(0, 80),
-        target_value: corrected.slice(0, 80),
-      });
-    }
-
-    if ((path.endsWith(".drug_name") || path.endsWith(".strength") || path.endsWith(".sig") || path.endsWith(".qty") || path.endsWith(".refills")) && original) {
-      out.push({
-        store_id: storeId,
-        kind: "text_replace",
-        source_key: `${path}::${original}`.slice(0, 240),
-        target_value: corrected,
-      });
-    }
-
-    if (path.includes("health_card") && corrected) {
-      out.push({
-        store_id: storeId,
-        kind: "health_card_example",
-        source_key: str(c.context?.patient_name || "pattern", 80),
-        target_value: corrected,
-      });
-    }
-  }
-  return out;
-}
-
-async function upsertMappings(cfg, mappings) {
-  if (!mappings.length) return;
-  await fetch(`${cfg.url}/rest/v1/learned_mappings?on_conflict=store_id,kind,source_key`, {
-    method: "POST",
-    headers: sbHeaders(cfg.key, {
-      Prefer: "resolution=merge-duplicates,return=minimal",
-    }),
-    body: JSON.stringify(
-      mappings.map((m) => ({
-        ...m,
-        hit_count: 1,
-        last_seen_at: new Date().toISOString(),
-      })),
-    ),
-  });
-
-  for (const m of mappings) {
-    const q = new URLSearchParams({
-      store_id: `eq.${m.store_id}`,
-      kind: `eq.${m.kind}`,
-      source_key: `eq.${m.source_key}`,
-      select: "id,hit_count",
-    });
-    const get = await fetch(`${cfg.url}/rest/v1/learned_mappings?${q}`, { headers: sbHeaders(cfg.key) });
-    if (!get.ok) continue;
-    const rows = await get.json();
-    if (!rows[0]) continue;
-    await fetch(`${cfg.url}/rest/v1/learned_mappings?id=eq.${rows[0].id}`, {
-      method: "PATCH",
-      headers: sbHeaders(cfg.key, { Prefer: "return=minimal" }),
-      body: JSON.stringify({
-        hit_count: (rows[0].hit_count || 1) + 1,
-        target_value: m.target_value,
-        last_seen_at: new Date().toISOString(),
-      }),
-    });
-  }
 }
 
 export default async function handler(req, res) {
@@ -193,6 +101,8 @@ export default async function handler(req, res) {
       field_path: str(c.field_path, 120),
       original_value: str(c.original_value, 400),
       corrected_value: str(c.corrected_value, 400),
+      source,
+      pending_rx_id: c.pending_rx_id != null && Number.isSafeInteger(Number(c.pending_rx_id)) ? Number(c.pending_rx_id) : null,
       context: {
         ...(c.context && typeof c.context === "object" ? c.context : {}),
         source,
@@ -206,23 +116,22 @@ export default async function handler(req, res) {
     return send(res, 202, { ok: true, saved: rows.length, stored: false, message: "Accepted (Supabase not configured)" });
   }
 
-  const resp = await fetch(`${cfg.url}/rest/v1/extraction_feedback`, {
-    method: "POST",
-    headers: sbHeaders(cfg.key, { Prefer: "return=minimal" }),
-    body: JSON.stringify(rows),
-  });
-
-  if (!resp.ok) {
-    console.error("[learn] feedback insert failed", resp.status);
+  const headers = sbHeaders(cfg.key);
+  const stored = await insertFeedback(cfg, headers, rows);
+  if (!stored) {
+    console.error("[learn] feedback insert failed");
     return send(res, 500, { error: "Failed to store feedback" });
   }
 
   const mappings = inferMappings(storeId, rows);
-  try {
-    await upsertMappings(cfg, mappings);
-  } catch (err) {
-    console.error("[learn] mapping upsert", err?.message || err);
+  let bumped = 0;
+  for (const m of mappings) {
+    try {
+      if (await bumpMapping(cfg, headers, m)) bumped += 1;
+    } catch (err) {
+      console.error("[learn] mapping bump", err?.message || err);
+    }
   }
 
-  return send(res, 201, { ok: true, saved: rows.length, mappings: mappings.length, stored: true, source });
+  return send(res, 201, { ok: true, saved: rows.length, mappings: bumped, stored: true, source });
 }

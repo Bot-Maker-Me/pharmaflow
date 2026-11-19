@@ -12,6 +12,7 @@ import { LocalHelperClient, type HelperInfo, type HelperStatus, type PushOutcome
 import { createSampleDocument, uid } from "@/services/mockVision";
 import { countPdfPages } from "@/services/pdf";
 import { requestExtraction } from "@/services/vision";
+import { isTiffFile, tiffToPageUrls } from "@/services/tiff";
 import type { KeystrokeStep } from "@/lib/pms";
 import {
   DEFAULT_SETTINGS,
@@ -98,12 +99,19 @@ function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const LIVE_DEFAULT_FLAG = "pharmflow.live-default.v1";
+
 function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const merged = { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
     if (merged.apiBaseUrl === "http://localhost:8000") merged.apiBaseUrl = "";
+    // One-time: the old default was "demo" (fake data). Browsers that saved it must move to live.
+    if (!localStorage.getItem(LIVE_DEFAULT_FLAG)) {
+      merged.extractionMode = "live";
+      localStorage.setItem(LIVE_DEFAULT_FLAG, "1");
+    }
     return merged;
   } catch {
     return DEFAULT_SETTINGS;
@@ -237,6 +245,26 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
               is_prescription: !(pageCount > 1 && index === 0),
             })),
           });
+        } else if (isTiffFile(file)) {
+          try {
+            const urls = await tiffToPageUrls(file);
+            created.push({
+              id: uid("doc"),
+              name: file.name,
+              kind: "image",
+              sizeBytes: file.size,
+              pageCount: urls.length,
+              addedAt: new Date().toISOString(),
+              pages: urls.map((imageUrl, index) => ({
+                pageNumber: index + 1,
+                is_cover_page: urls.length > 1 && index === 0,
+                is_prescription: !(urls.length > 1 && index === 0),
+                imageUrl,
+              })),
+            });
+          } catch (error) {
+            toast.error(`Could not read ${file.name}: ${(error as Error).message}`, { duration: Infinity });
+          }
         } else {
           created.push({
             id: uid("doc"),
@@ -252,15 +280,25 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
       setDocuments((prev) => [...created, ...prev]);
       setPipeline({ active: true, stage: "Vision AI extraction", progress: 54 });
       const collected: Script[] = [];
+      let failures = 0;
       for (const document of created) {
         const outcome = await requestExtraction(document, settingsRef.current);
         collected.push(...outcome.scripts);
-        if (outcome.warning) toast.warning(outcome.warning);
+        if (outcome.warning) toast.warning(outcome.warning, { duration: 10000 });
+        if (outcome.error) {
+          failures += 1;
+          logActivity(`Scan failed for ${document.name}: ${outcome.error}`, "warn");
+          toast.error(`Could not scan ${document.name}: ${outcome.error}`, { duration: Infinity });
+        }
       }
       setScripts((prev) => [...collected, ...prev]);
       setPipeline({ active: false, stage: "", progress: 0 });
-      logActivity(`Extracted ${collected.length} prescription(s)`, "ok");
-      toast.success(`${collected.length} prescription(s) ready for verification`);
+      if (collected.length) {
+        logActivity(`Extracted ${collected.length} prescription(s)`, "ok");
+        toast.success(`${collected.length} prescription(s) ready for verification`);
+      } else if (!failures) {
+        toast.warning("No prescriptions were found in the upload");
+      }
     },
     [logActivity],
   );
