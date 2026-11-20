@@ -18,3 +18,10 @@ python kroll_tray_helper.py --dry-run --verbose   # no keystrokes sent
 
 Safety: `flow.py` only issues SELECTs and never logs patient data; the helper only types into the focused
 PMS window and never talks to the internet. Secrets live in `config.ini` (gitignored) and Vercel env vars.
+
+## flow_body.py (the Kroll poller)
+
+`flow.py` is a small launcher; the real agent is `flow_body.py` in this folder (committed to the repo).
+It reads `PendingNewRx`, loads the fax image (`ScriptImageId`) through `kroll_images.py`, sends it to
+`/api/agent-rx` for Claude vision OCR, and (SHADOW) sends staff-vs-agent differences to `/api/learn`.
+Requires `Pillow` for image compression: `pip install -r requirements.txt`.

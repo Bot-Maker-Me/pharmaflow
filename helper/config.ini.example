@@ -44,6 +44,14 @@ pending_qty = DispQty
 pending_refills = UnlimitedRefills
 pending_sig = Sig
 pending_created = WrittenDate
+; Fax image id on the pending row. Lets the agent read the fax the Kroll server received (cloud OCR).
+; If this column does not exist in your Kroll, the agent logs a warning and keeps syncing SQL data only.
+pending_script_image_id = ScriptImageId
+; Where the image bytes live. Leave blank to auto-probe dbo.RxScriptImage / dbo.ScriptImage / ...
+; (find the real one with the INFORMATION_SCHEMA query in helper/SCRIPT_IMAGE_OCR.md)
+; image_table = dbo.RxScriptImage
+; image_id = Id
+; image_data = ImageData
 pending_status = Status
 ; Status is numeric in this Kroll: 1 = new/waiting (checked against live counts)
 pending_status_value = 1
