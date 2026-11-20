@@ -28,7 +28,7 @@ export function QuickActions({ className }: { className?: string }) {
 
   const openDocument = (documentId: string) => {
     const first = scripts.find((script) => script.documentId === documentId);
-    if (first) navigate(`/verify/${first.id}`);
+    if (first) navigate(`/app/verify/${first.id}`);
   };
 
   return (
@@ -79,7 +79,7 @@ export function QuickActions({ className }: { className?: string }) {
             })
           )}
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => navigate("/queue")} className="gap-2">
+          <DropdownMenuItem onSelect={() => navigate("/app/queue")} className="gap-2">
             <Inbox className="h-4 w-4" />
             Open the prescription queue
           </DropdownMenuItem>
@@ -108,7 +108,7 @@ export function QuickActions({ className }: { className?: string }) {
             variant="outline"
             size="icon"
             aria-label="Settings"
-            onClick={() => navigate("/settings")}
+            onClick={() => navigate("/app/settings")}
           >
             <Settings2 className="h-4 w-4" />
           </Button>

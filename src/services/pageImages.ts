@@ -62,10 +62,25 @@ async function pdfPageToJpeg(doc: ProcessedDocument, pageNumber: number): Promis
   return canvasToJpeg(canvas);
 }
 
+/** Render ONE page (0-based index) to a JPEG data URL. Lets callers scan pages as they are rendered. */
+export async function renderDocumentPage(doc: ProcessedDocument, index: number): Promise<string> {
+  if (doc.kind === "pdf") {
+    if (!doc.pdfData || doc.pdfData.byteLength === 0) {
+      throw new Error("This PDF has no data (the file was empty or not fully downloaded). Re-download it and upload again.");
+    }
+    return pdfPageToJpeg(doc, index + 1);
+  }
+  const page = doc.pages[index];
+  if (!page?.imageUrl) throw new Error("Uploaded image is missing");
+  return imageUrlToJpeg(page.imageUrl);
+}
+
 /** One JPEG data URL per page, in page order. Throws if a page cannot be rendered. */
 export async function renderDocumentPages(doc: ProcessedDocument): Promise<string[]> {
   if (doc.kind === "pdf") {
-    if (!doc.pdfData) throw new Error("PDF data is missing");
+    if (!doc.pdfData || doc.pdfData.byteLength === 0) {
+      throw new Error("This PDF has no data (the file was empty or not fully downloaded). Re-download it and upload again.");
+    }
     const out: string[] = [];
     for (let n = 1; n <= doc.pageCount; n += 1) out.push(await pdfPageToJpeg(doc, n));
     return out;

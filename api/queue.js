@@ -18,6 +18,31 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+/** Replace stored private image paths with signed links that expire in 1 hour (bucket rx-images is private). */
+async function signImages(rows, supabaseUrl, key) {
+  await Promise.all(
+    rows.map(async (row) => {
+      const stored = row.page_image_url;
+      if (typeof stored !== "string" || !stored.startsWith("private:")) return;
+      try {
+        const resp = await fetch(
+          `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/sign/rx-images/${stored.slice(8)}`,
+          {
+            method: "POST",
+            headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ expiresIn: 3600 }),
+          },
+        );
+        const data = resp.ok ? await resp.json() : null;
+        row.page_image_url = data?.signedURL ? `${supabaseUrl.replace(/\/$/, "")}/storage/v1${data.signedURL}` : null;
+      } catch {
+        row.page_image_url = null;
+      }
+    }),
+  );
+  return rows;
+}
+
 function tokenOk(provided, expected) {
   if (typeof provided !== "string" || !expected) return false;
   const a = Buffer.from(provided);
@@ -64,7 +89,7 @@ export default async function handler(req, res) {
         const rows2 = await resp2.json();
         return send(res, 200, { ok: true, count: rows2.length, rows: rows2 });
       }
-      const rows = await resp.json();
+      const rows = await signImages(await resp.json(), url, key);
       return send(res, 200, { ok: true, count: rows.length, rows });
     }
 

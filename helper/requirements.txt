@@ -13,3 +13,6 @@ requests>=2.32.0
 
 # optional: packaging into a single .exe
 # pyinstaller>=6.6.0
+
+# optional: read faxes Kroll stores as PDF blobs
+pypdfium2>=4.30.0

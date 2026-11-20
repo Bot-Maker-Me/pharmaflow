@@ -80,7 +80,7 @@ export default function Queue() {
             </div>
           </div>
 
-          <QueueTable scripts={filtered} onOpen={(id) => navigate(`/verify/${id}`)} />
+          <QueueTable scripts={filtered} onOpen={(id) => navigate(`/app/verify/${id}`)} />
         </CardContent>
       </Card>
     </div>

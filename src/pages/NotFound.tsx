@@ -15,7 +15,7 @@ export default function NotFound() {
             That route does not exist in the PharmFlow workspace.
           </p>
           <Button asChild>
-            <Link to="/">Back to intake</Link>
+            <Link to="/app">Back to intake</Link>
           </Button>
         </CardContent>
       </Card>

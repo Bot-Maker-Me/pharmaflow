@@ -161,7 +161,8 @@ async function uploadImage(cfg, storeId, pendingRxId, dataUrl) {
     console.warn("[agent-rx] storage upload failed", resp.status, t.slice(0, 180));
     return null;
   }
-  return `${cfg.url}/storage/v1/object/public/rx-images/${path}`;
+  // Private bucket: only the object path is stored. /api/queue turns it into a short-lived signed link.
+  return `private:${path}`;
 }
 
 

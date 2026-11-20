@@ -67,7 +67,7 @@ export default function Verify() {
             <p className="text-xs text-muted-foreground">
               Drop a faxed prescription on the intake page or load a sample fax to populate the queue.
             </p>
-            <Button onClick={() => navigate("/")}>Go to intake</Button>
+            <Button onClick={() => navigate("/app")}>Go to intake</Button>
           </CardContent>
         </Card>
       </div>
@@ -128,7 +128,7 @@ export default function Verify() {
     pushCompletedRef.current = false;
     if (!settings.autoAdvance) return;
     const queue = scripts.filter((script) => script.status === "pending" && script.id !== active.id);
-    if (queue.length) navigate(`/verify/${queue[0].id}`);
+    if (queue.length) navigate(`/app/verify/${queue[0].id}`);
   };
 
   return (
@@ -139,7 +139,7 @@ export default function Verify() {
             value={document.id}
             onValueChange={(value) => {
               const next = scripts.find((script) => script.documentId === value);
-              if (next) navigate(`/verify/${next.id}`);
+              if (next) navigate(`/app/verify/${next.id}`);
             }}
           >
             <SelectTrigger className="h-8 w-[240px] text-xs">
@@ -157,7 +157,7 @@ export default function Verify() {
         </div>
 
         {pageScripts.length > 1 ? (
-          <Tabs value={active.id} onValueChange={(value) => navigate(`/verify/${value}`)}>
+          <Tabs value={active.id} onValueChange={(value) => navigate(`/app/verify/${value}`)}>
             <TabsList>
               {pageScripts.map((script, index) => (
                 <TabsTrigger key={script.id} value={script.id}>
@@ -173,7 +173,7 @@ export default function Verify() {
             variant="outline"
             size="sm"
             disabled={!previousScript}
-            onClick={() => previousScript && navigate(`/verify/${previousScript.id}`)}
+            onClick={() => previousScript && navigate(`/app/verify/${previousScript.id}`)}
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             Previous
@@ -182,7 +182,7 @@ export default function Verify() {
             variant="outline"
             size="sm"
             disabled={!nextScript}
-            onClick={() => nextScript && navigate(`/verify/${nextScript.id}`)}
+            onClick={() => nextScript && navigate(`/app/verify/${nextScript.id}`)}
           >
             Next
             <ArrowRight className="h-3.5 w-3.5" />
@@ -200,7 +200,7 @@ export default function Verify() {
               const firstOnPage = scripts.find(
                 (script) => script.documentId === document.id && script.pageNumber === next,
               );
-              if (firstOnPage) navigate(`/verify/${firstOnPage.id}`);
+              if (firstOnPage) navigate(`/app/verify/${firstOnPage.id}`);
             }}
             overlays={overlays}
             onSelectField={setActiveField}

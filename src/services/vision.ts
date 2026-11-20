@@ -8,7 +8,7 @@ import {
   snapshotFromScript,
 } from "./learn";
 import { createSyntheticExtraction, uid } from "./mockVision";
-import { renderDocumentPages } from "./pageImages";
+import { renderDocumentPage } from "./pageImages";
 
 /**
  * Vision AI extraction client.
@@ -156,7 +156,9 @@ function mapWireScript(
   return script;
 }
 
-const PAGES_PER_REQUEST = 2;
+/** One page per request keeps every request small (Vercel's 4.5 MB limit) and lets pages run in parallel. */
+const PAGE_CONCURRENCY = 3;
+const REQUEST_TIMEOUT_MS = 90_000;
 
 /** Turn a failed /api/extract response into a message the user can act on. */
 async function describeFailure(response: Response): Promise<string> {
@@ -180,6 +182,7 @@ async function describeFailure(response: Response): Promise<string> {
 export async function requestExtraction(
   document: ProcessedDocument,
   settings: Settings,
+  onProgress?: (done: number, total: number) => void,
 ): Promise<ExtractionOutcome> {
   // Pull latest staff/shadow corrections so this extract benefits immediately.
   const storeId =
@@ -211,41 +214,97 @@ export async function requestExtraction(
   }
 
   try {
-    const pageImages = await renderDocumentPages(document);
+    const total = document.kind === "pdf" ? document.pageCount : document.pages.length;
     const endpoint = `${settings.apiBaseUrl.replace(/\/$/, "")}/api/extract`;
-    const wireScripts: VisionScript[] = [];
     const hints = fewShotHintsFromMappings(10);
 
-    for (let offset = 0; offset < pageImages.length; offset += PAGES_PER_REQUEST) {
-      const batch = pageImages.slice(offset, offset + PAGES_PER_REQUEST);
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(settings.apiToken ? { "x-access-token": settings.apiToken } : {}),
-        },
-        body: JSON.stringify({
-          file_name: document.name,
-          page_count: document.pageCount,
-          page_images: batch,
-          store_id: storeId,
-          learn_hints: hints,
-        }),
-      });
+    interface PageResult {
+      pageNumber: number;
+      scripts: VisionScript[];
+      note?: string;
+      error?: string;
+      fatal?: boolean;
+    }
+    const results: PageResult[] = [];
+    const pending = Array.from({ length: total }, (_, index) => index);
+    let done = 0;
 
-      if (!response.ok) throw new Error(await describeFailure(response));
+    async function scanPage(index: number): Promise<PageResult> {
+      const pageNumber = index + 1;
+      const image = await renderDocumentPage(document, index);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        let response: Response;
+        try {
+          response = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(settings.apiToken ? { "x-access-token": settings.apiToken } : {}),
+            },
+            body: JSON.stringify({
+              file_name: document.name,
+              page_count: total,
+              page_images: [image],
+              store_id: storeId,
+              learn_hints: hints,
+            }),
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          });
+        } catch {
+          if (attempt === 2) return { pageNumber, scripts: [], error: "the request timed out or the network dropped" };
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          continue;
+        }
+        if (response.ok) {
+          const data = (await response.json()) as { scripts?: VisionScript[]; warning?: string };
+          return { pageNumber, scripts: data.scripts ?? [], note: data.warning };
+        }
+        const retryable = response.status === 429 || response.status === 503 || response.status === 504;
+        if (retryable && attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 3000 * (attempt + 1)));
+          continue;
+        }
+        // Wrong token / missing endpoint will fail on every page: stop early and report it once.
+        return { pageNumber, scripts: [], error: await describeFailure(response), fatal: response.status === 401 || response.status === 404 };
+      }
+      return { pageNumber, scripts: [], error: "unknown error" };
+    }
 
-      const data = (await response.json()) as { scripts?: VisionScript[] };
-      for (const wire of data.scripts ?? []) {
-        const pageNumber = (wire.document_metadata?.page_number ?? 1) + offset;
-        wireScripts.push({
-          ...wire,
-          document_metadata: { ...wire.document_metadata, page_number: pageNumber },
-        });
+    async function worker() {
+      while (pending.length) {
+        if (results.some((result) => result.fatal)) return;
+        const index = pending.shift()!;
+        try {
+          results.push(await scanPage(index));
+        } catch (error) {
+          results.push({ pageNumber: index + 1, scripts: [], error: (error as Error).message });
+        }
+        done += 1;
+        onProgress?.(done, total);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(PAGE_CONCURRENCY, total) }, worker));
+    results.sort((a, b) => a.pageNumber - b.pageNumber);
+
+    const wireScripts: VisionScript[] = [];
+    for (const result of results) {
+      for (const wire of result.scripts) {
+        wireScripts.push({ ...wire, document_metadata: { ...wire.document_metadata, page_number: result.pageNumber } });
       }
     }
 
-    if (!wireScripts.length) throw new Error("No prescriptions were found in the document");
+    const failed = results.filter((result) => result.error);
+    if (!wireScripts.length) {
+      const reason = failed[0]?.error ?? results.find((result) => result.note)?.note;
+      throw new Error(reason ?? "No prescriptions were found in the document");
+    }
+    const notices: string[] = [];
+    if (failed.length) {
+      notices.push(`Page${failed.length > 1 ? "s" : ""} ${failed.map((r) => r.pageNumber).join(", ")} could not be read (${failed[0].error}). Re-upload those pages.`);
+    }
+    for (const result of results) {
+      if (result.note && /cut off/i.test(result.note)) notices.push(`Page ${result.pageNumber}: ${result.note}`);
+    }
 
     const scripts: Script[] = wireScripts.map((wire, index) => {
       const pageNumber = wire.document_metadata?.page_number ?? 1;
@@ -255,7 +314,7 @@ export async function requestExtraction(
       return mapWireScript(wire, document, pageNumber, onPage.indexOf(wire), onPage.length || index + 1);
     });
 
-    return { scripts, source: "live" };
+    return { scripts, source: "live", ...(notices.length ? { warning: notices.join(" ") } : {}) };
   } catch (error) {
     return { scripts: [], source: "live", error: (error as Error).message };
   }

@@ -1594,6 +1594,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="compare shadow decisions with what staff entered; prints go-live verdict")
     parser.add_argument("--schema-report", action="store_true",
                         help="write schema_report.txt (columns of your Kroll tables, no data) and exit")
+    parser.add_argument("--find-images", action="store_true",
+                        help="find which table holds the fax images for recent pending Rx and exit")
     parser.add_argument("--test", action="store_true", help="connect, poll once, print counts, exit")
     args = parser.parse_args(argv)
 
@@ -1627,6 +1629,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.discover:
         logger = setup_logging(cfg.agent_version)
         KrollDB(cfg, logger).discover()
+        return 0
+
+    if args.find_images:
+        logger = setup_logging(cfg.agent_version)
+        db = KrollDB(cfg, logger)
+        import kroll_images
+        sc = cfg.schema
+        col = sc.get("pending_script_image_id") or "ScriptImageId"
+        conn = db.ensure()
+        cur = conn.cursor()
+        try:
+            cur.execute(f"SELECT TOP 5 [{col}] FROM {sc['pending_table']} WITH (NOLOCK) "
+                        f"WHERE [{col}] IS NOT NULL ORDER BY [{sc['pending_id']}] DESC")
+            ids = [r[0] for r in cur.fetchall()]
+        except Exception as exc:
+            print(f"Could not read {col} from {sc['pending_table']}: {exc}")
+            print("That column may not exist. Run find_kroll_tables.sql (in this folder) and look for the fax image link.")
+            return 1
+        finally:
+            cur.close()
+        if not ids:
+            print(f"No pending prescriptions have a {col} yet. Receive a fax in Kroll first, then run this again.")
+            return 1
+        print(f"Testing recent {col} values: {ids}")
+        kroll_images.find_image_source(conn, ids)
         return 0
 
     agent = PharmFlowAgent(cfg)

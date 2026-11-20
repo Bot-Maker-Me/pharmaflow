@@ -14,6 +14,7 @@
 import { timingSafeEqual } from "node:crypto";
 
 import { findDinCandidates, pickUnique } from "../server/dpd.js";
+import { parseModelJson } from "../server/jsonrepair.js";
 import { MIN_HITS_REWRITE, isAutoRewritePath, normDin, normText } from "../server/learning.js";
 
 const MAX_PAGES = 8;
@@ -87,14 +88,6 @@ function parseDataUrl(url) {
   const match = /^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(url || "");
   if (!match) return null;
   return { media_type: match[1] === "image/jpg" ? "image/jpeg" : match[1], data: match[2] };
-}
-
-function extractJson(text) {
-  const cleaned = text.replace(/^```(?:json)?\s*|\s*```$/gim, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start === -1 || end <= start) throw new Error("no JSON object in model output");
-  return JSON.parse(cleaned.slice(start, end + 1));
 }
 
 function num(value, fallback = 0) {
@@ -373,7 +366,9 @@ export default async function handler(req, res) {
       hintBlock,
   });
 
-  try {
+  const startedAt = Date.now();
+  async function callModel(extraNote) {
+    const blocks = extraNote ? [...content, { type: "text", text: extraNote }] : content;
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -383,25 +378,50 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model,
-        max_tokens: 4096,
+        max_tokens: 8192,
         system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content }],
+        messages: [{ role: "user", content: blocks }],
       }),
     });
-
     if (!resp.ok) {
       console.error("[extract] anthropic error", resp.status);
-      return send(res, 502, { error: await anthropicError(resp) });
+      return { error: await anthropicError(resp) };
     }
-
     const data = await resp.json();
     const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-    let parsed;
-    try {
-      parsed = extractJson(text);
-    } catch {
-      return send(res, 502, { error: "The model did not return readable JSON for this page. Try again or rescan at higher quality." });
+    return { text, stop: data.stop_reason };
+  }
+
+  try {
+    let attempt = await callModel("");
+    if (attempt.error) return send(res, 502, { error: attempt.error });
+    let parsed = parseModelJson(attempt.text);
+
+    // Retry once (if there is time left in the 60 s function budget) when the reply was not usable JSON.
+    if (!parsed && Date.now() - startedAt < 25000) {
+      console.warn("[extract] unreadable reply, retrying once; stop_reason=", attempt.stop);
+      attempt = await callModel(
+        'Your previous reply was not valid JSON. Reply again with ONLY the JSON object, starting with { and ending with }. If these pages contain no prescription, return {"scripts":[]}.',
+      );
+      if (attempt.error) return send(res, 502, { error: attempt.error });
+      parsed = parseModelJson(attempt.text);
     }
+
+    let warning = "";
+    if (!parsed) {
+      if (!String(attempt.text || "").includes("{")) {
+        // The model answered in prose (cover sheet, blank or unreadable page): nothing to extract, not a failure.
+        parsed = { value: { scripts: [] }, repaired: false };
+        warning = "No prescription could be read on this page (cover sheet, blank or unreadable scan).";
+      } else {
+        return send(res, 502, {
+          error: `The model's reply could not be read (${attempt.stop || "unknown"}). Try again, or rescan at higher quality.`,
+        });
+      }
+    } else if (parsed.repaired || attempt.stop === "max_tokens") {
+      warning = "The reply was cut off, so the last prescription on this page may be missing. Check the fax carefully.";
+    }
+    parsed = parsed.value;
     let learnApplied = 0;
     const scripts = (Array.isArray(parsed.scripts) ? parsed.scripts : [])
       .map(sanitiseScript)
@@ -413,7 +433,7 @@ export default async function handler(req, res) {
       });
 
     await resolveMissingDins(scripts);
-    return send(res, 200, { scripts, model, learn_applied: learnApplied });
+    return send(res, 200, { scripts, model, learn_applied: learnApplied, ...(warning ? { warning } : {}) });
   } catch (err) {
     console.error("[extract] failed:", err?.message || err);
     return send(res, 502, { error: "Extraction failed" });

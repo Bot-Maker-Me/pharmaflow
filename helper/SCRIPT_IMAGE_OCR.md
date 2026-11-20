@@ -34,11 +34,18 @@ Discover real table:
 sqlcmd -S localhost -U rx -P YOURPASS -d Pharmacy -Q "SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE COLUMN_NAME LIKE '%Image%' OR DATA_TYPE IN ('varbinary','image') ORDER BY 1,2,3"
 ```
 
+## Find the image table automatically
+
+```bat
+python flow.py --find-images
+```
+Tests your newest faxes against every binary column in the database and prints the exact `[Schema]` lines to use. SQL you can run by hand: `find_kroll_tables.sql`.
+
 ## Cloud
 
 - `AGENT_API_KEY`, `ANTHROPIC_API_KEY`, Supabase service role
 - Run `supabase/migrations/20261106_script_image_ocr.sql`
-- Create public storage bucket `rx-images` if upload fails
+- Storage bucket `rx-images` must exist and be PRIVATE (the migration creates it; the site serves 1-hour signed links)
 
 ## Note
 

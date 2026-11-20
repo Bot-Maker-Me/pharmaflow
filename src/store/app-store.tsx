@@ -230,6 +230,11 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
       setPipeline({ active: true, stage: "Reading documents", progress: 8 });
       const created: ProcessedDocument[] = [];
       for (const file of files) {
+        if (file.size === 0) {
+          toast.error(`${file.name} is empty (0 bytes). Re-download or re-scan it and upload again.`, { duration: Infinity });
+          logActivity(`Skipped ${file.name}: file is empty`, "warn");
+          continue;
+        }
         const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
         if (isPdf) {
           const buffer = await file.arrayBuffer();
@@ -285,7 +290,13 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
       const collected: Script[] = [];
       let failures = 0;
       for (const document of created) {
-        const outcome = await requestExtraction(document, settingsRef.current);
+        const outcome = await requestExtraction(document, settingsRef.current, (done, total) =>
+          setPipeline({
+            active: true,
+            stage: `Vision AI extraction: page ${done} of ${total} (${document.name})`,
+            progress: Math.round(54 + (done / Math.max(total, 1)) * 40),
+          }),
+        );
         collected.push(...outcome.scripts);
         if (outcome.warning) toast.warning(outcome.warning, { duration: 10000 });
         if (outcome.error) {

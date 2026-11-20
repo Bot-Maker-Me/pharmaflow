@@ -8,6 +8,8 @@ alter table public.agent_sync_queue
   add column if not exists ocr_strength text,
   add column if not exists ocr_health_card text;
 
--- Storage bucket for fax JPEGs (create once in Dashboard > Storage if needed)
--- insert into storage.buckets (id, name, public) values ('rx-images', 'rx-images', true)
---   on conflict (id) do nothing;
+-- Private storage bucket for fax JPEGs (patient data: never public).
+-- The API stores the object path and /api/queue hands out 1-hour signed links.
+insert into storage.buckets (id, name, public)
+values ('rx-images', 'rx-images', false)
+on conflict (id) do update set public = false;
