@@ -1,13 +1,19 @@
 # PharmFlow local helpers — simplified layout
 
-Only **two** Python programs. Nothing else to run.
+You only need to run **two** programs.
 
-| File | Where it runs | What it does |
-|------|---------------|--------------|
-| **`server_agent.py`** | **One** pharmacy server PC (the machine that can reach Kroll SQL Server) | Polls for new faxes, reads the image, sends to cloud for AI OCR |
-| **`workstation_helper.py`** | **Every** pharmacist workstation | Types the verified prescription into the focused Kroll window |
+| File you run | Where | What it does |
+|--------------|-------|--------------|
+| **`server_agent.py`** | **One** pharmacy server PC (can reach Kroll SQL) | Polls for new faxes → AI OCR → cloud queue |
+| **`workstation_helper.py`** | **Every** pharmacist PC | Types verified Rx into the focused Kroll window |
 
-The **Vercel web app** is the shared UI. Open it in Chrome/Edge on any PC. Staff review the queue there and click **Push**. The workstation helper only needs to be running on the PC they are sitting at.
+Internal support files (do **not** run these yourself):
+- `flow_body.py` — full poller logic (loaded by server_agent.py)
+- `kroll_images.py` — fax image reader (used by the poller)
+
+The **Vercel web app** is the shared UI. Open the same URL on any PC.
+Staff review the queue there and click **Push**. The workstation helper only
+needs to be running on the PC they are sitting at.
 
 ---
 
@@ -53,7 +59,7 @@ In the web app → **Settings**:
 
 ## 3. Vercel web app (already deployed)
 
-Yes — open the same Vercel URL on **every** PC. It is the central dashboard.
+**Yes — open the same Vercel URL on every PC.** It is the central dashboard.
 No install needed for the UI itself. Only the workstation helper is local.
 
 ---
@@ -62,5 +68,5 @@ No install needed for the UI itself. Only the workstation helper is local.
 
 - `server_agent.py` only runs `SELECT` queries. It never writes to Kroll.
 - Start in `MODE = SHADOW` for a week. Compare with `--shadow-report` before going `LIVE`.
-- `workstation_helper.py` only types when the Kroll window is focused and the request comes from your allowed origin.
+- `workstation_helper.py` only types when the Kroll window is focused.
 - Get written permission from the pharmacy owner before connecting to the live database.
