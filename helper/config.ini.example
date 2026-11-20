@@ -1,72 +1,50 @@
+; =====================================================================
+; PharmFlow config.ini
+; Copy this file to config.ini and fill in the values marked CHANGE_ME
+; =====================================================================
+
 [Agent]
-; SHADOW = read Kroll + log IDs only, sends NOTHING to the cloud (use this first)
-; LIVE   = also push to the cloud API
+; SHADOW = safe testing (read + log only). LIVE = also push to cloud queue.
 MODE = SHADOW
 POLL_INTERVAL_SEC = 5
-AGENT_VERSION = 1.3.0
-; Same name on every PC of this pharmacy (e.g. henderson). Prevents duplicate rows.
+AGENT_VERSION = 1.4.0
+; Same name on every PC of this pharmacy (e.g. henderson). Prevents duplicates.
 STORE_ID = default
-; NEW_ONLY = on the very first run ignore the old pending rows and only watch new ones.
-; ALL = process the whole backlog first.
+; NEW_ONLY = ignore old pending rows on first run. ALL = process backlog too.
 START_MODE = NEW_ONLY
-; true = a missing insurance plan makes the row an EXCEPTION. Keep false until PatPln columns are verified.
 REQUIRE_PLAN = false
-; Hours to wait for staff to fill in a new pending row (patient/prescriber/drug/qty) before judging it.
 WAIT_HOURS = 24
 
 [Database]
+; Connection to the Kroll SQL Server (read-only login recommended)
 SERVER = localhost
 DATABASE = Pharmacy
 UID = rx
 PWD = CHANGE_ME_strong_password
 DRIVER = ODBC Driver 17 for SQL Server
-; Set to false if the server has a properly trusted certificate
 TRUST_SERVER_CERTIFICATE = true
 
 [Cloud]
-; must be https://  (only needed when cloud is configured)
+; Your Vercel app URL + the AGENT_API_KEY you set in Vercel env vars
 API_URL = https://pharmaflow-swart.vercel.app/api/sync-queue
 API_KEY = CHANGE_ME_long_random_token
-; Only if Vercel Deployment Protection blocks the API URL (see docs/SETUP.md)
-; VERCEL_BYPASS_TOKEN =
 
-; Run `python flow.py --discover` on the Kroll server, then override any names
-; that differ. Everything below shows the defaults, commented out.
+; ---------------------------------------------------------------------
+; Schema mapping — run:  python server_agent.py --discover
+; Then override any names that differ on this pharmacy's Kroll install.
+; ---------------------------------------------------------------------
 [Schema]
-; Verified against this pharmacy's Kroll (PendingNewRx / PatAdd / PatPln column lists).
 pending_table = dbo.PendingNewRx
 pending_id = Id
 pending_pat_id = PatId
 pending_doc_id = DocId
-; DrgId = Kroll's internal drug id. DIN is often empty on pending rows. Check with: python flow.py --profile PendingNewRx
 pending_drug_id = DrgId
 pending_qty = DispQty
 pending_refills = UnlimitedRefills
 pending_sig = Sig
 pending_created = WrittenDate
-; Fax image id on the pending row. Lets the agent read the fax the Kroll server received (cloud OCR).
-; If this column does not exist in your Kroll, the agent logs a warning and keeps syncing SQL data only.
 pending_script_image_id = ScriptImageId
-; Where the image bytes live. Leave blank to auto-probe dbo.RxScriptImage / dbo.ScriptImage / ...
-; (find the real one with the INFORMATION_SCHEMA query in helper/SCRIPT_IMAGE_OCR.md)
-; Kroll stores fax images in dbo.ScriptImage -> dbo.ScriptImageContent (Content, may be compressed).
-; The agent reads that layout automatically, so leave image_table blank.
-; image_table = dbo.RxScriptImage
-; image_id = Id
-; image_data = ImageData
-; Kroll's drug table, used to find a missing DIN (the agent searches it by drug name + strength and
-; ranks products by how often your pharmacy dispenses them). Blank = auto-detect dbo.Drg / dbo.Drug.
-; Check the log line "Kroll drug table detected" after starting; if it says none was found, fill these in:
-; Verified on this pharmacy: dbo.Drg (ID, DIN, BrandName, GenericName, Strength). Auto-detected; override only if needed:
-; drug_table = dbo.Drg
-; drug_name = BrandName
-; drug_name2 = GenericName
-; drug_strength = Strength
-; drug_id = ID
-; drug_din = DIN
-; drug_name = Name
 pending_status = Status
-; Status is numeric in this Kroll: 1 = new/waiting (checked against live counts)
 pending_status_value = 1
 pat_table = dbo.Pat
 pat_id = ID
@@ -79,7 +57,6 @@ addr_line = Address1
 addr_primary_col = UseForBilling
 plan_table = dbo.PatPln
 plan_pat_id = PatID
-; PatPln.PlanID is empty in this Kroll; SubPlanID is the filled column
 plan_id = SubPlanID
 plan_seq_col = Sequence
 plan_deleted_col = Deleted
@@ -90,23 +67,19 @@ doc_last = LastName
 lic_table = dbo.DocLicence
 lic_doc_id = DocID
 lic_num = Licence
+; Leave image_table blank — the agent auto-detects ScriptImage / ScriptImageContent
+; image_table =
+; image_id =
+; image_data =
 
 [Helper]
-; Origins allowed to call the keystroke helper (comma separated, no trailing /)
+; Used only by workstation_helper.py on pharmacist PCs
 ALLOWED_ORIGINS = http://localhost:5173,https://pharmaflow-swart.vercel.app
-; Shared secret; paste the same value in PharmFlow > Settings > Helper token
 TOKEN =
-; Refuse to type unless the focused window title contains the PMS name
 REQUIRE_WINDOW_CHECK = true
-; WINDOW_KROLL = kroll
 STEP_DELAY_SEC = 0.4
 
-; --- Shadow week: where the FINISHED prescriptions live (used by `flow.py --shadow-report`, read-only).
-; Fill from schema_report.txt. rx_link_col is the column holding the PendingRxId, if Kroll keeps one;
-; otherwise matching uses patient + drug + rx_created after the pending date.
 [RxSchema]
-; What staff actually entered in Kroll (dbo.Rx). No link column exists, so flow.py matches on
-; patient + drug + filled on/after the day the pending Rx was first seen.
 rx_table = dbo.Rx
 rx_pat_id = PatID
 rx_doc_id = DocID
@@ -117,9 +90,7 @@ rx_sig = SIG
 rx_created = FillDate
 
 [Shadow]
-; the report says READY only if all of these hold
 GO_LIVE_MIN_MATCH = 0.995
 GO_LIVE_MIN_SAMPLES = 200
 GO_LIVE_MIN_AUTO_RATE = 0.80
-; When agent plan differs from what staff typed in Kroll, POST corrections to /api/learn automatically.
 AUTO_LEARN = true

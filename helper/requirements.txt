@@ -1,18 +1,19 @@
-# keystroke helper (kroll_tray_helper.py)
+# Shared requirements for both helpers
+
+# workstation_helper.py (keystrokes)
 Flask>=3.0.0
 waitress>=3.0.0
 pyautogui>=0.9.54
 pyperclip>=1.8.2
-# optional system-tray shell (helper runs headless without these)
 pystray>=0.19.5
 Pillow>=10.0.0
 
-# Kroll SQL poller (flow.py)
+# server_agent.py (Kroll SQL poller)
 pyodbc>=5.1.0
 requests>=2.32.0
 
-# optional: packaging into a single .exe
-# pyinstaller>=6.6.0
-
 # optional: read faxes Kroll stores as PDF blobs
 pypdfium2>=4.30.0
+
+# optional: package into a single .exe
+# pyinstaller>=6.6.0
