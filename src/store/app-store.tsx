@@ -16,6 +16,7 @@ import { isTiffFile, tiffToPageUrls } from "@/services/tiff";
 import type { KeystrokeStep } from "@/lib/pms";
 import {
   DEFAULT_SETTINGS,
+  type DinCandidate,
   type Medication,
   type Patient,
   type PipelineState,
@@ -53,6 +54,8 @@ export interface ManualScriptInput {
   drug_id?: string;
   store_id?: string;
   page_image_url?: string;
+  din_candidates?: DinCandidate[];
+  din_source?: string;
 }
 
 interface AppStoreValue {
@@ -515,9 +518,11 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
             confidence: 0.9,
             din_status: enriched.din_status,
             din_product: enriched.din_product,
+            din_candidates: input.din_candidates,
+            din_source: input.din_source,
             field_scores: {
               drug_name: 0.85,
-              din: enriched.din ? 0.9 : 0.2,
+              din: enriched.din ? (input.din_source === "dpd_unique_match" ? 0.7 : 0.9) : 0.2,
               strength: enriched.strength ? 0.9 : 0.2,
               quantity: input.quantity ? 0.95 : 0.3,
               refills: 0.9,

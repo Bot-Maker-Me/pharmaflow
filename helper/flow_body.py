@@ -236,6 +236,15 @@ class AgentConfig:
             if value and not IDENT_RE.match(value):
                 raise ValueError(f"[Schema] {key}={value!r} is not a valid SQL identifier")
 
+        # Kroll's drug table (DIN lookup). Blank = auto-detect dbo.Drg / dbo.Drug on first use.
+        self.drug_schema: Dict[str, str] = {"drug_table": "", "drug_id": "", "drug_din": "", "drug_name": ""}
+        if cp.has_section("Schema"):
+            for key in self.drug_schema:
+                self.drug_schema[key] = cp.get("Schema", key, fallback="").strip()
+        for key, value in self.drug_schema.items():
+            if value and not IDENT_RE.match(value):
+                raise ValueError(f"[Schema] {key}={value!r} is not a valid SQL identifier")
+
         # SHADOW also records to Supabase (decisions + comparisons) when the cloud is configured.
         self.cloud_enabled: bool = bool(self.api_url and self.api_key and "CHANGE_ME" not in self.api_key)
 
@@ -740,6 +749,128 @@ class KrollDB:
         finally:
             cur.close()
 
+    # ---- DIN lookup in Kroll's own drug table (read-only SELECTs, parameterised) ----------------------
+
+    _DRUG_TABLES = ("Drg", "Drug", "DrugMaster", "Drugs")
+    _NOISE = {"mg", "mcg", "ml", "oral", "capsule", "capsules", "cap", "caps", "tablet", "tablets", "tab", "tabs",
+              "hcl", "hydrochloride", "sodium", "potassium", "calcium", "sulfate", "sulphate", "maleate",
+              "tartrate", "besylate", "succinate", "and", "the", "of"}
+
+    @staticmethod
+    def _din8(value: Any) -> str:
+        digits = re.sub(r"\D", "", str(value or ""))
+        if len(digits) == 7:
+            digits = digits.zfill(8)
+        return digits if len(digits) == 8 and digits != "00000000" else ""
+
+    def _resolve_drug_schema(self) -> Optional[Dict[str, str]]:
+        cached = getattr(self, "_drug", None)
+        if cached is not None:
+            return cached or None
+        self._drug = False
+        ds = dict(self.cfg.drug_schema)
+        try:
+            cur = self.ensure().cursor()
+            try:
+                if not (ds["drug_table"] and ds["drug_id"] and ds["drug_din"]):
+                    for cand in self._DRUG_TABLES:
+                        cur.execute("SELECT TABLE_SCHEMA, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?", (cand,))
+                        found = cur.fetchall()
+                        if not found:
+                            continue
+                        cols = {r[1].upper(): r[1] for r in found}
+                        idc = next((cols[c] for c in ("ID", "DRGID", "DRUGID") if c in cols), None)
+                        dinc = next((cols[c] for c in ("DIN", "DINNUM", "DINNUMBER", "DRUGDIN") if c in cols), None) \
+                            or next((v for k, v in cols.items() if k.startswith("DIN")), None)
+                        namec = next((cols[c] for c in ("NAME", "DRUGNAME", "DRGNAME", "DESCRIPTION", "DESCR", "BRANDNAME", "LABELNAME") if c in cols), None)
+                        if idc and dinc:
+                            ds = {"drug_table": f"{found[0][0]}.{cand}", "drug_id": idc, "drug_din": dinc,
+                                  "drug_name": ds["drug_name"] or namec or ""}
+                            self.log.info("Kroll drug table detected: %s (id=%s, din=%s, name=%s)",
+                                          ds["drug_table"], idc, dinc, ds["drug_name"] or "-")
+                            break
+            finally:
+                cur.close()
+        except Exception as exc:
+            self.log.warning("Drug table detection failed: %s", exc)
+        if ds["drug_table"] and ds["drug_id"] and ds["drug_din"] and all(
+            IDENT_RE.match(v) or not v for v in ds.values()
+        ):
+            self._drug = ds
+            return ds
+        self.log.info("No Kroll drug table with a DIN column found - set drug_table/drug_id/drug_din in [Schema] "
+                      "(python flow.py --discover). Health Canada lookup still runs in the cloud.")
+        return None
+
+    def drug_by_id(self, drug_id: Any) -> Optional[Dict[str, str]]:
+        """DIN + name of the drug Kroll has on this pending Rx (DrugId), or None."""
+        ds = self._resolve_drug_schema()
+        if not ds or drug_id in (None, "", 0):
+            return None
+        name_sel = f", [{ds['drug_name']}]" if ds["drug_name"] else ", NULL"
+        try:
+            cur = self.ensure().cursor()
+            try:
+                cur.execute(f"SELECT TOP 1 [{ds['drug_din']}]{name_sel} FROM {ds['drug_table']} WITH (NOLOCK) "
+                            f"WHERE [{ds['drug_id']}] = ?", (drug_id,))
+                row = cur.fetchone()
+            finally:
+                cur.close()
+        except Exception as exc:
+            self.log.debug("drug_by_id failed: %s", exc)
+            return None
+        if not row:
+            return None
+        din = self._din8(row[0])
+        return {"din": din, "name": str(row[1] or "").strip()} if (din or row[1]) else None
+
+    def search_drugs(self, drug_name: str, strength: str = "") -> List[Dict[str, Any]]:
+        """Kroll drugs matching name + strength, most-dispensed first. Empty list if unavailable."""
+        ds = self._resolve_drug_schema()
+        if not ds or not ds["drug_name"]:
+            return []
+        words = [w for w in re.split(r"[^a-z\-]+", (drug_name or "").lower()) if len(w) > 2 and w not in self._NOISE]
+        if not words:
+            return []
+        num = re.search(r"(\d+(?:\.\d+)?)\s*(mg|mcg|ug|g|ml|iu|%)", f"{strength} {drug_name}".lower())
+        sql = (f"SELECT TOP 60 [{ds['drug_id']}], [{ds['drug_din']}], [{ds['drug_name']}] "
+               f"FROM {ds['drug_table']} WITH (NOLOCK) WHERE [{ds['drug_name']}] LIKE ? AND [{ds['drug_din']}] IS NOT NULL")
+        params: List[Any] = [f"%{words[0]}%"]
+        if num:
+            sql += f" AND ([{ds['drug_name']}] LIKE ? OR [{ds['drug_name']}] LIKE ?)"
+            params += [f"%{num.group(1)} {num.group(2)}%", f"%{num.group(1)}{num.group(2)}%"]
+        found: List[Dict[str, Any]] = []
+        try:
+            cur = self.ensure().cursor()
+            try:
+                cur.execute(sql, params)
+                for drg_id, din, name in cur.fetchall():
+                    d = self._din8(din)
+                    if d:
+                        found.append({"drug_id": drg_id, "din": d, "name": str(name or "").strip(), "uses": 0})
+            finally:
+                cur.close()
+        except Exception as exc:
+            self.log.debug("search_drugs failed: %s", exc)
+            return []
+        # Rank by how often this pharmacy dispenses each product (last 12 months when a date column is known).
+        r = self.cfg.rx_schema
+        if r.get("rx_table") and r.get("rx_drug_id"):
+            when = f" AND [{r['rx_created']}] >= DATEADD(month, -12, GETDATE())" if r.get("rx_created") else ""
+            try:
+                cur = self.ensure().cursor()
+                try:
+                    for item in found[:25]:
+                        cur.execute(f"SELECT COUNT(*) FROM {r['rx_table']} WITH (NOLOCK) WHERE [{r['rx_drug_id']}] = ?{when}",
+                                    (item["drug_id"],))
+                        item["uses"] = int(cur.fetchone()[0])
+                finally:
+                    cur.close()
+            except Exception as exc:
+                self.log.debug("dispense ranking skipped: %s", exc)
+        found.sort(key=lambda x: (-x["uses"], x["name"]))
+        return found[:5]
+
     def attach_image(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """Load the fax image for this pending row (ScriptImageId) as a JPEG data URL. Never raises."""
         if not row.get("ScriptImageId"):
@@ -1013,6 +1144,7 @@ class CloudClient:
         if 200 <= resp.status_code < 300:
             try:
                 body = resp.json()
+                self.last_body = body
                 if body.get("ocr_error"):
                     self.log.warning("Cloud OCR note: %s", body["ocr_error"])
             except ValueError:
@@ -1114,6 +1246,12 @@ class PharmFlowAgent:
             "issues": issues,
             "planned": planned_entry(row),
         }
+        if self.cfg.cloud_enabled:
+            drug = self.db.drug_by_id(row.get("DrugId"))
+            if drug:
+                payload["pending_rx"]["drug_din"] = drug["din"]
+                payload["pending_rx"]["drug_name"] = drug["name"]
+
         if self.cfg.cloud_enabled and row.get("ScriptImageId"):
             with_img = self.db.attach_image(row)
             if with_img.get("page_image_data_url"):
@@ -1122,6 +1260,10 @@ class PharmFlowAgent:
                 ok, err, _ = self.cloud.push_rx(ocr_payload)
                 if ok:
                     self.log.info("Synced PendingRxId=%s to cloud with fax OCR", pending_id)
+                    try:
+                        self._hint_din_from_kroll(pending_id)
+                    except Exception as exc:  # a DIN hint must never stop the sync loop
+                        self.log.warning("DIN hint skipped for PendingRxId=%s: %s", pending_id, exc)
                     self.store.mark_processed(pending_id)
                     return
                 self.log.warning("Fax OCR upload failed for PendingRxId=%s (%s) - syncing SQL fields only",
@@ -1135,6 +1277,27 @@ class PharmFlowAgent:
             if not permanent:
                 self.store.spool_payload(pending_id, payload, err)
         self.store.mark_processed(pending_id)
+
+    def _hint_din_from_kroll(self, pending_id: int) -> None:
+        """Fax had no DIN? Look the drug up in Kroll's own drug table and tell the cloud what we found."""
+        body = getattr(self.cloud, "last_body", None) or {}
+        med = ((body.get("merged") or {}).get("medications") or [{}])[0]
+        if med.get("din") or med.get("is_compound") or not med.get("drug_name"):
+            return
+        cands = self.db.search_drugs(med.get("drug_name", ""), med.get("strength", ""))
+        if not cands:
+            return
+        top = cands[0]
+        # Fill only when it is clear-cut: a single product, or one the pharmacy dispenses far more than the rest.
+        clear = len(cands) == 1 or (top["uses"] >= 5 and top["uses"] >= 3 * max(1, cands[1]["uses"]))
+        self.cloud.session.post(
+            self.cloud._sibling("agent-rx"),
+            json={"type": "din_hint", "store_id": self.cfg.store_id, "pending_rx_id": pending_id,
+                  "din": top["din"] if clear else "", "source": "kroll_sql",
+                  "candidates": [{"din": c["din"], "name": c["name"], "uses": c["uses"]} for c in cands]},
+            timeout=CLOUD_TIMEOUT_SEC,
+        )
+        self.log.info("DIN hint sent for PendingRxId=%s (%d candidate(s), auto-fill=%s)", pending_id, len(cands), clear)
 
     def _flush_spool(self) -> None:
         if not self.cfg.cloud_enabled:

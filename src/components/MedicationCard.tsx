@@ -1,4 +1,6 @@
-import { BadgeCheck, FlaskConical, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
+import * as React from "react";
+import { BadgeCheck, FlaskConical, Loader2, RefreshCw, Search, ShieldAlert, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { ConfidenceField } from "@/components/ConfidenceField";
 import { Badge } from "@/components/ui/badge";
@@ -7,8 +9,16 @@ import { medicationIssues, medicationLevel } from "@/lib/confidence";
 import { toPmsSig } from "@/lib/sig";
 import { DIN_STATUS_META } from "@/services/dpd";
 import { cn } from "@/lib/utils";
-import type { Medication, Script } from "@/lib/types";
+import type { DinCandidate, Medication, Script } from "@/lib/types";
 import { useAppStore } from "@/store/app-store";
+
+const DIN_SOURCE_LABEL: Record<string, string> = {
+  fax: "Read from the fax",
+  kroll_drug_record: "From the drug on the Kroll Rx",
+  kroll_sql: "From Kroll's drug table (most dispensed)",
+  dpd_unique_match: "Only marketed match in Health Canada DPD",
+  staff_selected: "Chosen by staff",
+};
 
 const DIN_ICON = {
   verified: BadgeCheck,
@@ -30,7 +40,8 @@ export function MedicationCard({
   activeField?: string;
   onFocusField: (key: string) => void;
 }) {
-  const { updateMedication, reverifyDin } = useAppStore();
+  const { updateMedication, reverifyDin, settings } = useAppStore();
+  const [finding, setFinding] = React.useState(false);
   const focusKey = `med.${medication.id}`;
   const level = medicationLevel(medication);
   const issues = medicationIssues(medication);
@@ -38,6 +49,42 @@ export function MedicationCard({
   const StatusIcon = DIN_ICON[medication.din_status];
 
   const patch = (changes: Partial<Medication>) => updateMedication(script.id, medication.id, changes);
+
+  async function findDin() {
+    if (!settings.apiToken) {
+      toast.error("Set the API access token in Settings first.");
+      return;
+    }
+    setFinding(true);
+    try {
+      const query = new URLSearchParams({ name: medication.drug_name, strength: medication.strength });
+      const response = await fetch(`${settings.apiBaseUrl.replace(/\/$/, "")}/api/din-lookup?${query}`, {
+        headers: { "x-access-token": settings.apiToken },
+      });
+      if (!response.ok) throw new Error(response.status === 401 ? "Wrong API access token" : `Server returned ${response.status}`);
+      const data = (await response.json()) as { candidates: DinCandidate[]; unique_din: string | null };
+      if (!data.candidates.length) {
+        toast.message("No marketed Health Canada product matches. Enter the DIN manually.");
+        return;
+      }
+      patch({
+        din_candidates: data.candidates,
+        ...(data.unique_din && !medication.din ? { din: data.unique_din, din_source: "dpd_unique_match" } : {}),
+      });
+      toast.success(
+        data.unique_din ? "One marketed match found. Please confirm it." : `${data.candidates.length} possible DINs. Pick one below.`,
+      );
+    } catch (error) {
+      toast.error(`DIN lookup failed: ${(error as Error).message}`);
+    } finally {
+      setFinding(false);
+    }
+  }
+
+  function pickDin(candidate: DinCandidate) {
+    patch({ din: candidate.din, din_source: "staff_selected" });
+    reverifyDin(script.id, medication.id);
+  }
 
   return (
     <div className="rounded-xl border border-border bg-secondary/40 p-3">
@@ -56,6 +103,12 @@ export function MedicationCard({
           </Badge>
         ) : null}
         <div className="ml-auto flex items-center gap-1">
+          {!medication.is_compound && !medication.din ? (
+            <Button variant="outline" size="sm" onClick={() => void findDin()} disabled={finding || !medication.drug_name} title="Search Health Canada DPD for the DIN">
+              {finding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+              Find DIN
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"
@@ -103,11 +156,37 @@ export function MedicationCard({
           hint={
             medication.is_compound
               ? "Compound — keyed manually in the PMS"
-              : medication.din_status === "verified"
-                ? "Matched in Health Canada DPD"
-                : "Not found in the DPD extract"
+              : medication.din_source && DIN_SOURCE_LABEL[medication.din_source] && medication.din_source !== "fax"
+                ? `${DIN_SOURCE_LABEL[medication.din_source]}${medication.din_source === "staff_selected" ? "" : " — please confirm"}`
+                : medication.din_status === "verified"
+                  ? "Matched in Health Canada DPD"
+                  : "Not found in the DPD extract"
           }
         />
+        {medication.din_candidates?.length && !medication.is_compound ? (
+          <div className="sm:col-span-2">
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Possible DINs — click to use
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {medication.din_candidates.map((candidate) => (
+                <button
+                  key={candidate.din}
+                  type="button"
+                  onClick={() => pickDin(candidate)}
+                  className={cn(
+                    "rounded-md border px-2 py-1 text-left text-[11px] transition-colors hover:bg-secondary",
+                    candidate.din === medication.din ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-950/40" : "border-border",
+                  )}
+                  title={[candidate.company, candidate.form, candidate.strength].filter(Boolean).join(" · ")}
+                >
+                  <span className="font-mono">{candidate.din}</span> {candidate.brand}
+                  {candidate.uses ? <span className="text-muted-foreground"> · {candidate.uses}× dispensed</span> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <ConfidenceField
           label="Strength"
           value={medication.strength}

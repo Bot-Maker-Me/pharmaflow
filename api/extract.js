@@ -13,6 +13,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 
+import { findDinCandidates, pickUnique } from "../server/dpd.js";
 import { MIN_HITS_REWRITE, isAutoRewritePath, normDin, normText } from "../server/learning.js";
 
 const MAX_PAGES = 8;
@@ -263,6 +264,36 @@ async function anthropicError(resp) {
   return `Anthropic returned ${resp.status}${msg ? `: ${msg}` : ""}`;
 }
 
+
+/**
+ * Fill a missing DIN from Health Canada DPD. Only a single marketed match is filled in (and flagged
+ * for confirmation); several matches are returned as choices for staff. Never throws.
+ */
+async function resolveMissingDins(scripts) {
+  const jobs = [];
+  for (const script of scripts) {
+    for (const med of script.medications) {
+      if (med.din || med.is_compound || !med.drug_name) continue;
+      jobs.push(
+        findDinCandidates({ drug_name: med.drug_name, strength: med.strength })
+          .then(({ candidates }) => {
+            if (!candidates.length) return;
+            med.din_candidates = candidates.slice(0, 8);
+            const unique = pickUnique(candidates);
+            if (unique) {
+              med.din = unique.din;
+              med.din_source = "dpd_unique_match";
+              med.confidence = Math.min(med.confidence, 0.7);
+            }
+          })
+          .catch(() => {}),
+      );
+    }
+  }
+  if (!jobs.length) return;
+  await Promise.race([Promise.all(jobs), new Promise((resolve) => setTimeout(resolve, 20000))]);
+}
+
 export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
@@ -381,6 +412,7 @@ export default async function handler(req, res) {
         return script;
       });
 
+    await resolveMissingDins(scripts);
     return send(res, 200, { scripts, model, learn_applied: learnApplied });
   } catch (err) {
     console.error("[extract] failed:", err?.message || err);

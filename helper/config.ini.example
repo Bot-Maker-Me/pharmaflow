@@ -52,6 +52,13 @@ pending_script_image_id = ScriptImageId
 ; image_table = dbo.RxScriptImage
 ; image_id = Id
 ; image_data = ImageData
+; Kroll's drug table, used to find a missing DIN (the agent searches it by drug name + strength and
+; ranks products by how often your pharmacy dispenses them). Blank = auto-detect dbo.Drg / dbo.Drug.
+; Check the log line "Kroll drug table detected" after starting; if it says none was found, fill these in:
+; drug_table = dbo.Drg
+; drug_id = ID
+; drug_din = DIN
+; drug_name = Name
 pending_status = Status
 ; Status is numeric in this Kroll: 1 = new/waiting (checked against live counts)
 pending_status_value = 1

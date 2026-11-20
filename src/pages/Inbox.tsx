@@ -78,6 +78,36 @@ export default function Inbox() {
     void load();
   }, [load]);
 
+  // Live feed: poll the queue so faxes arriving on the Kroll server appear without pressing Refresh.
+  const knownIds = React.useRef<Set<number> | null>(null);
+  React.useEffect(() => {
+    if (!settings.apiToken) return;
+    const timer = window.setInterval(async () => {
+      if (document.hidden) return;
+      try {
+        const response = await fetch(`${endpoint}?status=${tab}`, { headers });
+        if (!response.ok) return;
+        const data = (await response.json()) as { rows: InboxRow[] };
+        if (tab === "received") {
+          const seen = knownIds.current;
+          const fresh = seen ? data.rows.filter((row) => !seen.has(row.id)) : [];
+          if (fresh.length) {
+            toast.info(`${fresh.length} new fax${fresh.length > 1 ? "es" : ""} from Kroll`);
+          }
+          knownIds.current = new Set(data.rows.map((row) => row.id));
+        }
+        setRows(data.rows);
+      } catch {
+        /* transient network error: try again next tick */
+      }
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [endpoint, headers, settings.apiToken, tab]);
+
+  React.useEffect(() => {
+    if (tab === "received" && !knownIds.current && rows.length) knownIds.current = new Set(rows.map((row) => row.id));
+  }, [rows, tab]);
+
   async function setStatus(row: InboxRow, status: RowStatus) {
     const response = await fetch(endpoint, {
       method: "PATCH",
@@ -109,6 +139,8 @@ export default function Inbox() {
           row.ocr_drug_name ||
           (row.drug_id ? `Kroll drug ${row.drug_id}` : ""),
         din: ocrMed.din || row.ocr_din || "",
+        din_candidates: ocrMed.din_candidates,
+        din_source: ocrMed.din_source,
         strength: ocrMed.strength || row.ocr_strength || "",
         quantity: Number(ocrMed.quantity) || Number(row.qty) || 0,
         refills: Number(ocrMed.refills) || Number(row.refills) || 0,
@@ -150,7 +182,7 @@ export default function Inbox() {
               <InboxIcon className="h-4 w-4" /> Kroll inbox
             </CardTitle>
             <CardDescription>
-              Live Kroll SQL + ScriptImage OCR when available. Load into Verify for side-by-side image and fields.
+              Live feed from the Kroll server (refreshes every 15 s): SQL + fax image OCR. Load into Verify for side-by-side image and fields.
             </CardDescription>
           </div>
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>

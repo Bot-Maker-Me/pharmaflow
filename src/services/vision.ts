@@ -1,4 +1,4 @@
-import type { ProcessedDocument, Script, Settings } from "@/lib/types";
+import type { DinCandidate, ProcessedDocument, Script, Settings } from "@/lib/types";
 import { enrichMedicationFromDin } from "./dpd";
 import {
   applyLearnedToMedication,
@@ -47,6 +47,8 @@ export interface VisionScript {
     sig?: string;
     is_compound?: boolean;
     confidence?: number;
+    din_candidates?: DinCandidate[];
+    din_source?: string;
   }>;
   overall_confidence?: number;
   illegible_handwriting?: boolean;
@@ -93,9 +95,11 @@ function mapWireScript(
       confidence,
       din_status: enriched.din_status,
       din_product: enriched.din_product,
+      din_candidates: med.din_candidates,
+      din_source: med.din_source,
       field_scores: {
         drug_name: confidence,
-        din: confidence,
+        din: med.din_source === "dpd_unique_match" ? Math.min(confidence, 0.7) : confidence,
         strength: confidence,
         quantity: confidence,
         refills: confidence,

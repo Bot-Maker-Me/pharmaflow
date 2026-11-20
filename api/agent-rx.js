@@ -1,5 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 
+import { findDinCandidates, pickUnique } from "../server/dpd.js";
+
 const MODEL = process.env.EXTRACT_MODEL || process.env.ANTHROPIC_MODEL || "claude-sonnet-5-5";
 
 function send(res, status, body) {
@@ -105,8 +107,9 @@ function mergeSqlAndOcr(body, ocrScript) {
       confidence: ocrPrescriber.confidence ?? 0.7,
     },
     medications: [{
-      drug_name: ocrMed.drug_name || (pending.drug_id ? `Kroll drug ${pending.drug_id}` : ""),
-      din: normaliseDin(ocrMed.din) || "",
+      drug_name: ocrMed.drug_name || pending.drug_name || (pending.drug_id ? `Kroll drug ${pending.drug_id}` : ""),
+      din: normaliseDin(ocrMed.din) || normaliseDin(pending.drug_din) || "",
+      din_source: normaliseDin(ocrMed.din) ? "fax" : normaliseDin(pending.drug_din) ? "kroll_drug_record" : "",
       strength: ocrMed.strength || "",
       quantity: Number(ocrMed.quantity) || Number(pending.qty) || 0,
       refills: Number(ocrMed.refills) || Number(pending.refills) || 0,
@@ -161,6 +164,47 @@ async function uploadImage(cfg, storeId, pendingRxId, dataUrl) {
   return `${cfg.url}/storage/v1/object/public/rx-images/${path}`;
 }
 
+
+/**
+ * The Kroll agent searched Kroll's own drug table for this drug and found the DIN(s) the pharmacy stocks.
+ * body: { type:"din_hint", store_id, pending_rx_id, din, candidates:[{din,name,uses}], source }
+ * Only fills an EMPTY DIN; never overwrites what the fax / staff already have.
+ */
+async function handleDinHint(body, res) {
+  const cfg = supabaseConfig();
+  const storeId = String(body.store_id || "default").slice(0, 64);
+  const pendingRxId = Number(body.pending_rx_id);
+  if (!cfg || !Number.isSafeInteger(pendingRxId)) return send(res, 202, { ok: true, stored: false });
+  const filter = `store_id=eq.${encodeURIComponent(storeId)}&pending_rx_id=eq.${pendingRxId}`;
+  const cur = await fetch(`${cfg.url}/rest/v1/agent_sync_queue?${filter}&select=planned,ocr_din`, { headers: sbHeaders(cfg.key) });
+  const row = cur.ok ? (await cur.json())[0] : null;
+  if (!row) return send(res, 404, { error: "row not found" });
+  const planned = row.planned && typeof row.planned === "object" ? row.planned : {};
+  const merged = planned.ocr_merged && typeof planned.ocr_merged === "object" ? planned.ocr_merged : null;
+  const med = merged?.medications?.[0];
+  const din = normaliseDin(body.din);
+  const candidates = Array.isArray(body.candidates)
+    ? body.candidates.slice(0, 8).map((c) => ({ din: normaliseDin(c.din), brand: String(c.name || "").slice(0, 80), company: "Kroll", strength: "", form: "", uses: Number(c.uses) || 0 }))
+    : [];
+  if (med) {
+    if (candidates.length) med.din_candidates = [...candidates, ...(med.din_candidates || []).filter((c) => !candidates.some((k) => k.din === c.din))].slice(0, 10);
+    if (!med.din && /^\d{8}$/.test(din)) {
+      med.din = din;
+      med.din_source = String(body.source || "kroll_sql").slice(0, 30);
+    }
+  }
+  const patch = { planned: { ...planned, ...(merged ? { ocr_merged: merged } : {}) } };
+  if (!row.ocr_din && /^\d{8}$/.test(din)) patch.ocr_din = din;
+  const upd = await fetch(`${cfg.url}/rest/v1/agent_sync_queue?${filter}`, {
+    method: "PATCH",
+    headers: sbHeaders(cfg.key, { Prefer: "return=minimal" }),
+    body: JSON.stringify(patch),
+  });
+  return send(res, upd.ok ? 200 : 502, { ok: upd.ok, din: med?.din || null });
+}
+
+export const config = { maxDuration: 60 };
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return send(res, 405, { error: "POST only" });
   const expected = process.env.AGENT_API_KEY;
@@ -171,6 +215,7 @@ export default async function handler(req, res) {
     try { body = JSON.parse(body); } catch { return send(res, 400, { error: "Invalid JSON" }); }
   }
   if (!body || typeof body !== "object") return send(res, 400, { error: "Body required" });
+  if (body.type === "din_hint") return handleDinHint(body, res);
   const pending = body.pending_rx || {};
   const pendingRxId = Number(pending.pending_rx_id);
   if (!Number.isSafeInteger(pendingRxId) || pendingRxId < 0) {
@@ -189,6 +234,20 @@ export default async function handler(req, res) {
     if (cfg) pageImageUrl = await uploadImage(cfg, storeId, pendingRxId, pageImages[0]);
   }
   const merged = mergeSqlAndOcr(body, ocr.scripts[0]);
+  const med0 = merged.medications[0];
+  if (!med0.din && !med0.is_compound && med0.drug_name && !/^Kroll drug /.test(med0.drug_name)) {
+    try {
+      const { candidates } = await findDinCandidates({ drug_name: med0.drug_name, strength: med0.strength });
+      if (candidates.length) med0.din_candidates = candidates.slice(0, 8);
+      const unique = pickUnique(candidates);
+      if (unique) {
+        med0.din = unique.din;
+        med0.din_source = "dpd_unique_match";
+      }
+    } catch {
+      /* DPD unreachable: staff still pick the DIN in Verify */
+    }
+  }
   const suggestion = await learnedKrollDrug(cfg, storeId, merged.medications[0]?.din);
   const row = {
     store_id: storeId,

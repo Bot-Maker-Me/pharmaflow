@@ -25,3 +25,11 @@ PMS window and never talks to the internet. Secrets live in `config.ini` (gitign
 It reads `PendingNewRx`, loads the fax image (`ScriptImageId`) through `kroll_images.py`, sends it to
 `/api/agent-rx` for Claude vision OCR, and (SHADOW) sends staff-vs-agent differences to `/api/learn`.
 Requires `Pillow` for image compression: `pip install -r requirements.txt`.
+
+## Missing DIN
+
+When the fax has no DIN, PharmFlow looks for it in this order (it never guesses):
+1. The drug already on the Kroll Rx (`DrugId` -> Kroll drug table DIN).
+2. Kroll's drug table searched by name + strength, most-dispensed product first (clear-cut winners are filled, otherwise the options are shown).
+3. Health Canada's Drug Product Database (marketed products only; filled only if exactly one matches).
+Anything auto-filled is marked "please confirm" in Verify, and several matches appear as clickable choices.

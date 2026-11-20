@@ -22,6 +22,16 @@ export interface BBox {
   h: number;
 }
 
+export interface DinCandidate {
+  din: string;
+  brand: string;
+  company: string;
+  strength: string;
+  form: string;
+  /** How often this pharmacy dispensed it (Kroll SQL candidates only). */
+  uses?: number;
+}
+
 export interface Medication {
   id: string;
   drug_name: string;
@@ -33,6 +43,10 @@ export interface Medication {
   is_compound: boolean;
   confidence: number;
   din_status: DinStatus;
+  /** DINs the pharmacy can choose from when the fax had none (Kroll drug table / Health Canada DPD). */
+  din_candidates?: DinCandidate[];
+  /** Where an auto-filled DIN came from: fax, kroll_drug_record, kroll_sql, dpd_unique_match, staff_selected. */
+  din_source?: string;
   /** Brand / ingredient resolved from the Health Canada DPD cross-reference. */
   din_product?: string;
   bbox?: BBox;
