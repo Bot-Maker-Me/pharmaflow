@@ -1,35 +1,66 @@
-# PharmFlow local desktop helpers
+# PharmFlow local helpers — simplified layout
 
-Full step-by-step guide: [`docs/SETUP.md`](../docs/SETUP.md).
+Only **two** Python programs. Nothing else to run.
 
-| Script | Runs on | Role |
-|--------|---------|------|
-| `flow.py` | Kroll **server** PC | Read-only SQL poller of `PendingNewRx` → cloud (`--discover`, `--test`, SHADOW/LIVE) |
-| `kroll_tray_helper.py` | Pharmacist **work** PC | Keystroke bridge on `127.0.0.1:48120` (`--dry-run`, origin allow-list, window check) |
+| File | Where it runs | What it does |
+|------|---------------|--------------|
+| **`server_agent.py`** | **One** pharmacy server PC (the machine that can reach Kroll SQL Server) | Polls for new faxes, reads the image, sends to cloud for AI OCR |
+| **`workstation_helper.py`** | **Every** pharmacist workstation | Types the verified prescription into the focused Kroll window |
 
-Quick commands:
+The **Vercel web app** is the shared UI. Open it in Chrome/Edge on any PC. Staff review the queue there and click **Push**. The workstation helper only needs to be running on the PC they are sitting at.
+
+---
+
+## 1. Server PC (run once)
 
 ```powershell
-python flow.py --discover      # list DB tables/columns, then fix [Schema] in config.ini
-python flow.py --test          # connect + one poll
-python flow.py                 # run the loop
-python kroll_tray_helper.py --dry-run --verbose   # no keystrokes sent
+cd C:\PharmFlow\helper
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy config.ini.example config.ini
+notepad config.ini          # fill [Database] and [Cloud]
 ```
 
-Safety: `flow.py` only issues SELECTs and never logs patient data; the helper only types into the focused
-PMS window and never talks to the internet. Secrets live in `config.ini` (gitignored) and Vercel env vars.
+```powershell
+python server_agent.py --test          # must print TEST OK
+python server_agent.py --discover      # check real column names
+python server_agent.py                 # start (leave MODE=SHADOW first)
+```
 
-## flow_body.py (the Kroll poller)
+To keep it running after reboot:
 
-`flow.py` is a small launcher; the real agent is `flow_body.py` in this folder (committed to the repo).
-It reads `PendingNewRx`, loads the fax image (`ScriptImageId`) through `kroll_images.py`, sends it to
-`/api/agent-rx` for Claude vision OCR, and (SHADOW) sends staff-vs-agent differences to `/api/learn`.
-Requires `Pillow` for image compression: `pip install -r requirements.txt`.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install_service.ps1
+```
 
-## Missing DIN
+## 2. Each workstation
 
-When the fax has no DIN, PharmFlow looks for it in this order (it never guesses):
-1. The drug already on the Kroll Rx (`DrugId` -> Kroll drug table DIN).
-2. Kroll's drug table searched by name + strength, most-dispensed product first (clear-cut winners are filled, otherwise the options are shown).
-3. Health Canada's Drug Product Database (marketed products only; filled only if exactly one matches).
-Anything auto-filled is marked "please confirm" in Verify, and several matches appear as clickable choices.
+```powershell
+cd C:\PharmFlow\helper
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+# create config.ini with only the [Helper] section (see config.ini.example)
+python workstation_helper.py --dry-run --verbose   # safe test
+python workstation_helper.py                       # real mode
+```
+
+In the web app → **Settings**:
+- Helper URL = `http://localhost:48120`
+- Helper token = same value as `TOKEN` in config.ini
+- PMS = Kroll
+
+## 3. Vercel web app (already deployed)
+
+Yes — open the same Vercel URL on **every** PC. It is the central dashboard.
+No install needed for the UI itself. Only the workstation helper is local.
+
+---
+
+## Safety rules
+
+- `server_agent.py` only runs `SELECT` queries. It never writes to Kroll.
+- Start in `MODE = SHADOW` for a week. Compare with `--shadow-report` before going `LIVE`.
+- `workstation_helper.py` only types when the Kroll window is focused and the request comes from your allowed origin.
+- Get written permission from the pharmacy owner before connecting to the live database.
