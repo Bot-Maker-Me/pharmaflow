@@ -237,7 +237,7 @@ class AgentConfig:
                 raise ValueError(f"[Schema] {key}={value!r} is not a valid SQL identifier")
 
         # Kroll's drug table (DIN lookup). Blank = auto-detect dbo.Drg / dbo.Drug on first use.
-        self.drug_schema: Dict[str, str] = {"drug_table": "", "drug_id": "", "drug_din": "", "drug_name": ""}
+        self.drug_schema: Dict[str, str] = {"drug_table": "", "drug_id": "", "drug_din": "", "drug_name": "", "drug_name2": "", "drug_strength": ""}
         if cp.has_section("Schema"):
             for key in self.drug_schema:
                 self.drug_schema[key] = cp.get("Schema", key, fallback="").strip()
@@ -783,9 +783,12 @@ class KrollDB:
                         dinc = next((cols[c] for c in ("DIN", "DINNUM", "DINNUMBER", "DRUGDIN") if c in cols), None) \
                             or next((v for k, v in cols.items() if k.startswith("DIN")), None)
                         namec = next((cols[c] for c in ("NAME", "DRUGNAME", "DRGNAME", "DESCRIPTION", "DESCR", "BRANDNAME", "LABELNAME") if c in cols), None)
+                        name2 = cols.get("GENERICNAME", "") if (namec or "").upper() == "BRANDNAME" else ""
                         if idc and dinc:
                             ds = {"drug_table": f"{found[0][0]}.{cand}", "drug_id": idc, "drug_din": dinc,
-                                  "drug_name": ds["drug_name"] or namec or ""}
+                                  "drug_name": ds["drug_name"] or namec or "",
+                                  "drug_name2": ds.get("drug_name2") or name2,
+                                  "drug_strength": ds.get("drug_strength") or cols.get("STRENGTH", "")}
                             self.log.info("Kroll drug table detected: %s (id=%s, din=%s, name=%s)",
                                           ds["drug_table"], idc, dinc, ds["drug_name"] or "-")
                             break
@@ -807,7 +810,10 @@ class KrollDB:
         ds = self._resolve_drug_schema()
         if not ds or drug_id in (None, "", 0):
             return None
-        name_sel = f", [{ds['drug_name']}]" if ds["drug_name"] else ", NULL"
+        if ds["drug_name"] and ds.get("drug_name2"):
+            name_sel = f", COALESCE(NULLIF([{ds['drug_name2']}], ''), [{ds['drug_name']}])"
+        else:
+            name_sel = f", [{ds['drug_name']}]" if ds["drug_name"] else ", NULL"
         try:
             cur = self.ensure().cursor()
             try:
@@ -833,12 +839,17 @@ class KrollDB:
         if not words:
             return []
         num = re.search(r"(\d+(?:\.\d+)?)\s*(mg|mcg|ug|g|ml|iu|%)", f"{strength} {drug_name}".lower())
-        sql = (f"SELECT TOP 60 [{ds['drug_id']}], [{ds['drug_din']}], [{ds['drug_name']}] "
-               f"FROM {ds['drug_table']} WITH (NOLOCK) WHERE [{ds['drug_name']}] LIKE ? AND [{ds['drug_din']}] IS NOT NULL")
-        params: List[Any] = [f"%{words[0]}%"]
+        nc = [ds["drug_name"]] + ([ds["drug_name2"]] if ds.get("drug_name2") else [])
+        name_cond = "(" + " OR ".join(f"[{c}] LIKE ?" for c in nc) + ")"
+        full = "COALESCE(NULLIF([%s], ''), [%s])" % (nc[-1], nc[0]) if len(nc) > 1 else f"[{nc[0]}]"
+        sql = (f"SELECT TOP 60 [{ds['drug_id']}], [{ds['drug_din']}], {full} "
+               f"FROM {ds['drug_table']} WITH (NOLOCK) WHERE {name_cond} AND [{ds['drug_din']}] IS NOT NULL")
+        params: List[Any] = [f"%{words[0]}%"] * (2 if ds.get("drug_name2") else 1)
         if num:
-            sql += f" AND ([{ds['drug_name']}] LIKE ? OR [{ds['drug_name']}] LIKE ?)"
-            params += [f"%{num.group(1)} {num.group(2)}%", f"%{num.group(1)}{num.group(2)}%"]
+            sc = [ds["drug_name"]] + ([ds["drug_strength"]] if ds.get("drug_strength") else [])
+            sql += " AND (" + " OR ".join(f"[{c}] LIKE ? OR [{c}] LIKE ?" for c in sc) + ")"
+            for _ in sc:
+                params += [f"%{num.group(1)} {num.group(2)}%", f"%{num.group(1)}{num.group(2)}%"]
         found: List[Dict[str, Any]] = []
         try:
             cur = self.ensure().cursor()

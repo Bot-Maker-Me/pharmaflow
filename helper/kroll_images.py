@@ -187,9 +187,58 @@ def find_image_source(conn, image_ids):
         print("  None of the ids matched an image. The fax may be stored under a different key; send me the list above.")
 
 
+def _decode_content(blob: bytes, compression: Any = None) -> bytes:
+    """ScriptImageContent.Content may be compressed (ContentCompressionType). Sniff the real format."""
+    import gzip
+    import zlib
+    if blob[:4] in _MAGIC or blob[:3] == b"\xff\xd8\xff":
+        return blob
+    for fn in (zlib.decompress, gzip.decompress, lambda b: zlib.decompress(b, -15), lambda b: zlib.decompress(b[4:])):
+        try:
+            out = fn(blob)
+            if out[:4] in _MAGIC or out[:3] == b"\xff\xd8\xff":
+                return out
+        except Exception:
+            continue
+    log.warning("ScriptImageContent not recognised (compression=%s, first bytes=%s)", compression, blob[:8].hex())
+    return blob
+
+
+def _kroll_native(conn, image_id: Any) -> Optional[bytes]:
+    """Kroll layout: PendingNewRx.ScriptImageId -> dbo.ScriptImage.Id -> ScriptImageContentId -> dbo.ScriptImageContent."""
+    queries = (
+        "SELECT TOP 1 c.Content, c.ContentCompressionType FROM dbo.ScriptImage s WITH (NOLOCK) "
+        "JOIN dbo.ScriptImageContent c WITH (NOLOCK) ON c.ID = s.ScriptImageContentId WHERE s.Id = ?",
+        "SELECT TOP 1 Content, ContentCompressionType FROM dbo.ScriptImageContent WITH (NOLOCK) WHERE ID = ?",
+    )
+    for sql in queries:
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute(sql, (image_id,))
+                row = cur.fetchone()
+            finally:
+                cur.close()
+        except Exception as exc:
+            log.debug("Kroll native image query failed: %s", exc)
+            continue
+        if row and row[0] is not None:
+            blob = bytes(row[0])
+            if len(blob) >= 32:
+                out = _decode_content(blob, row[1])
+                log.info("Loaded script image id=%s from dbo.ScriptImageContent (%d bytes, compression=%s)",
+                         image_id, len(out), row[1])
+                return out
+    return None
+
+
 def fetch_image_bytes(conn, image_id: Any, schema: Dict[str, str]) -> Optional[bytes]:
     if image_id is None or image_id == "" or image_id == 0:
         return None
+    if not (schema.get("image_table") or "").strip():
+        native = _kroll_native(conn, image_id)
+        if native:
+            return native
     table = (schema.get("image_table") or "").strip()
     id_col = (schema.get("image_id") or "Id").strip()
     data_col = (schema.get("image_data") or "ImageData").strip()
