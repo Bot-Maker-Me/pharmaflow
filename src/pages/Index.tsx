@@ -38,8 +38,44 @@ interface FaxRow {
   } | null;
 }
 
+interface FaxStats {
+  received: { today: number; week: number; month: number };
+  cleared: { today: number; week: number; month: number };
+  waiting: number | null;
+}
+
 type Tab = "new" | "pushed";
 const POLL_MS = 10000;
+
+/** Short two-tone beep when a fax arrives. Browsers may block audio until the page was clicked once: ignore that. */
+function beep() {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new Ctx();
+    [880, 1175].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = freq;
+      gain.gain.value = 0.08;
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.18);
+      osc.stop(ctx.currentTime + i * 0.18 + 0.15);
+    });
+    window.setTimeout(() => void ctx.close(), 700);
+  } catch {
+    /* no audio available */
+  }
+}
+
+function Counter({ label, cleared, received }: { label: string; cleared: number | null; received: number | null }) {
+  return (
+    <div className="border-2 border-pf-ink bg-card p-4 dark:border-border">
+      <p className="pf-eyebrow text-muted-foreground">{label}</p>
+      <p className="pf-display mt-1 text-[44px] leading-none">{cleared ?? "–"}</p>
+      <p className="mt-1 font-data text-[11px] text-muted-foreground">cleared · {received ?? "–"} faxes received</p>
+    </div>
+  );
+}
 
 export default function Intake() {
   const { settings, scripts, createManualScript, helperStatus } = useAppStore();
@@ -49,6 +85,9 @@ export default function Intake() {
   const [newCount, setNewCount] = React.useState<number | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState<number | null>(null);
+  const [stats, setStats] = React.useState<FaxStats | null>(null);
+  const [fresh, setFresh] = React.useState<Set<number>>(new Set());
+  const knownNew = React.useRef<Set<number> | null>(null);
 
   const base = settings.apiBaseUrl.replace(/\/$/, "");
   const headers = React.useMemo(
@@ -62,16 +101,31 @@ export default function Intake() {
       return;
     }
     try {
-      const [shown, fresh] = await Promise.all([
+      const [shown, waiting, statsRes] = await Promise.all([
         fetch(`${base}/api/queue?kind=faxes&status=${tab}`, { headers }),
         tab === "new" ? Promise.resolve(null) : fetch(`${base}/api/queue?kind=faxes&status=new`, { headers }),
+        fetch(`${base}/api/queue?kind=fax_stats`, { headers }),
       ]);
       if (shown.status === 401) throw new Error("Wrong access token (Settings)");
       if (!shown.ok) throw new Error(`Server returned ${shown.status}`);
       const data = (await shown.json()) as { rows: FaxRow[] };
       setRows(data.rows);
-      if (tab === "new") setNewCount(data.rows.length);
-      else if (fresh?.ok) setNewCount(((await fresh.json()) as { rows: FaxRow[] }).rows.length);
+      if (statsRes.ok) setStats((await statsRes.json()) as FaxStats);
+      const newRows = tab === "new" ? data.rows : waiting?.ok ? ((await waiting.json()) as { rows: FaxRow[] }).rows : null;
+      if (newRows) {
+        setNewCount(newRows.length);
+        // A fax that was not in the list before = a new fax arrived: flash it, beep and tell the user.
+        const known = knownNew.current;
+        const arrived = known ? newRows.filter((f) => !known.has(f.mail_id)) : [];
+        knownNew.current = new Set(newRows.map((f) => f.mail_id));
+        if (arrived.length) {
+          const first = arrived[0].ocr?.scripts?.[0];
+          toast.success(`${arrived.length === 1 ? "New fax" : `${arrived.length} new faxes`}: ${first?.patient?.full_name ?? "prescription"} - ${first?.medications?.[0]?.drug_name ?? ""}`);
+          beep();
+          setFresh(new Set(arrived.map((f) => f.mail_id)));
+          window.setTimeout(() => setFresh(new Set()), 4000);
+        }
+      }
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -85,6 +139,14 @@ export default function Intake() {
     }, POLL_MS);
     return () => window.clearInterval(timer);
   }, [load]);
+
+  // Browser tab title shows how many faxes are waiting, so it is visible even from another window.
+  React.useEffect(() => {
+    document.title = newCount ? `(${newCount}) Faxes waiting - Pharma Flow` : "Pharma Flow";
+    return () => {
+      document.title = "Pharma Flow";
+    };
+  }, [newCount]);
 
   /** Make sure the fax exists as a script (the review screen works on scripts) and return its id. */
   const scriptFor = React.useCallback(
@@ -161,6 +223,12 @@ export default function Intake() {
       )}
       {error && <p className="border-2 border-destructive p-3 text-sm text-destructive">{error}</p>}
 
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Counter label="Today" cleared={stats?.cleared.today ?? null} received={stats?.received.today ?? null} />
+        <Counter label="This week" cleared={stats?.cleared.week ?? null} received={stats?.received.week ?? null} />
+        <Counter label="This month" cleared={stats?.cleared.month ?? null} received={stats?.received.month ?? null} />
+      </div>
+
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex gap-2">
           <Button size="sm" variant={tab === "new" ? "default" : "outline"} onClick={() => setTab("new")}>
@@ -184,7 +252,7 @@ export default function Intake() {
           const conf = s?.overall_confidence != null ? Math.round(s.overall_confidence * 100) : null;
           const weak = conf != null && conf < 85;
           return (
-            <li key={fax.mail_id} className="flex flex-wrap items-center justify-between gap-3 p-4">
+            <li key={fax.mail_id} className={`flex flex-wrap items-center justify-between gap-3 p-4 transition-colors duration-1000 ${fresh.has(fax.mail_id) ? "pf-flash" : ""}`}>
               <div className="min-w-0 flex-1">
                 <p className="text-[15px] font-bold">
                   {s?.patient?.full_name || "Patient not readable"}

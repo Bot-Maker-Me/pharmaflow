@@ -43,6 +43,31 @@ async function signImages(rows, supabaseUrl, key) {
   return rows;
 }
 
+const PHARMACY_TZ = process.env.PHARMACY_TZ || "America/Toronto";
+
+/** Offset (ms) of a time zone from UTC at a given instant. */
+function tzOffsetMs(tz, date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(date);
+  const v = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  const asUtc = Date.UTC(+v.year, +v.month - 1, +v.day, +v.hour % 24, +v.minute, +v.second);
+  return asUtc - date.getTime();
+}
+
+/** Start (as a UTC instant) of the pharmacy's day / Monday-week / month containing `now`. */
+function periodStarts(now = new Date(), tz = PHARMACY_TZ) {
+  const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(now);      // YYYY-MM-DD
+  const midnight = (dateStr) => {
+    const guess = new Date(`${dateStr}T00:00:00Z`);
+    return new Date(guess.getTime() - tzOffsetMs(tz, guess));
+  };
+  const [y, m, d] = ymd.split("-").map(Number);
+  const weekday = new Date(Date.UTC(y, m - 1, d)).getUTCDay();                       // 0 = Sunday
+  const monday = new Date(Date.UTC(y, m - 1, d - ((weekday + 6) % 7))).toISOString().slice(0, 10);
+  return { day: midnight(ymd), week: midnight(monday), month: midnight(`${y}-${String(m).padStart(2, "0")}-01`) };
+}
+
 function tokenOk(provided, expected) {
   if (typeof provided !== "string" || !expected) return false;
   const a = Buffer.from(provided);
@@ -68,6 +93,30 @@ export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
       const q = new URL(req.url, "http://x").searchParams;
+      if (q.get("kind") === "fax_stats") {
+        // Counts for the Intake page: prescription faxes received and faxes pushed to Kroll, today / this week / this month.
+        const starts = periodStarts();
+        const base2 = `${url.replace(/\/$/, "")}/rest/v1/inbound_faxes`;
+        const monthIso = encodeURIComponent(starts.month.toISOString());
+        const [recv, pushed, waiting] = await Promise.all([
+          fetch(`${base2}?select=created_at&is_prescription=eq.true&created_at=gte.${monthIso}&limit=5000`, { headers }),
+          fetch(`${base2}?select=pushed_at&status=eq.pushed&pushed_at=gte.${monthIso}&limit=5000`, { headers }),
+          fetch(`${base2}?select=mail_id&is_prescription=eq.true&status=eq.new&limit=500`, { headers }),
+        ]);
+        if (!recv.ok || !pushed.ok) return send(res, 500, { error: "Query failed" });
+        const count = (rows, col) => ({
+          today: rows.filter((r) => Date.parse(r[col]) >= starts.day.getTime()).length,
+          week: rows.filter((r) => Date.parse(r[col]) >= starts.week.getTime()).length,
+          month: rows.length,
+        });
+        return send(res, 200, {
+          ok: true,
+          timezone: PHARMACY_TZ,
+          received: count(await recv.json(), "created_at"),
+          cleared: count(await pushed.json(), "pushed_at"),
+          waiting: waiting.ok ? (await waiting.json()).length : null,
+        });
+      }
       if (q.get("kind") === "faxes") {
         // Prescriptions the agent read from Kroll's Inbound Docs (OCR), newest first, with a signed link to the fax image.
         // ?status=new (default) | pushed | dismissed
