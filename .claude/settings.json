@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./node_modules/**)",
+      "Read(./dist/**)",
+      "Read(./helper/.venv/**)",
+      "Read(./helper/logs/**)",
+      "Read(./helper/*.db)",
+      "Read(./helper/config.ini)",
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.production)",
+      "Read(./pnpm-lock.yaml)",
+      "Read(./graphify-out/graph.json)"
+    ]
+  }
+}

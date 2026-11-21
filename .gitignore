@@ -32,3 +32,6 @@ __pycache__/
 helper/dist/
 helper/build/
 *.spec
+
+# graphify (local code graph, rebuild with: graphify update .)
+graphify-out/
