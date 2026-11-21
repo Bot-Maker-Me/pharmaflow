@@ -56,6 +56,10 @@ export interface ManualScriptInput {
   page_image_url?: string;
   din_candidates?: DinCandidate[];
   din_source?: string;
+  /** Overall OCR confidence 0..1 (faxes read by the agent). */
+  confidence?: number;
+  /** Skip the "loaded" toast (bulk loading). */
+  quiet?: boolean;
 }
 
 interface AppStoreValue {
@@ -486,7 +490,9 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
       const label =
         source === "kroll_sql"
           ? `Kroll SQL · Rx #${input.pending_rx_id ?? "?"} · ${input.full_name}`
-          : `Manual entry - ${input.full_name}`;
+          : source === "fax"
+            ? `Inbound fax · ${input.full_name}`
+            : `Manual entry - ${input.full_name}`;
       const document: ProcessedDocument = {
         id: documentId,
         name: label,
@@ -541,12 +547,14 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
             },
           },
         ],
-        overallConfidence: source === "kroll_sql" ? 0.85 : 1,
+        overallConfidence: input.confidence ?? (source === "kroll_sql" ? 0.85 : 1),
         illegible: false,
         flags:
           source === "kroll_sql"
             ? ["From Kroll SQL agent", input.page_image_url ? "ScriptImage OCR attached" : "No ScriptImage on row"]
-            : ["Manually keyed"],
+            : source === "fax"
+              ? ["Read from Kroll Inbound Docs by the agent (OCR)", "Check every field against the fax image"]
+              : ["Manually keyed"],
         notes: source === "kroll_sql" ? `pending_rx_id=${input.pending_rx_id ?? ""}` : "",
         status: "pending",
         dinVerifiedCount: enriched.din_status === "verified" ? 1 : 0,
@@ -554,7 +562,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
       script.extractionSnapshot = snapshotFromScript(script);
       setDocuments((prev) => [document, ...prev]);
       setScripts((prev) => [script, ...prev]);
-      toast.success(input.page_image_url ? "SQL + OCR image loaded into Verify" : "Loaded into Verify");
+      if (!input.quiet) toast.success(input.page_image_url ? "SQL + OCR image loaded into Verify" : "Loaded into Verify");
       return scriptId;
     },
     [],

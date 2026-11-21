@@ -35,6 +35,24 @@ interface InboxRow {
   planned?: { ocr_merged?: Record<string, unknown> } | null;
 }
 
+const LOADED_KEY = "pf-loaded-faxes";
+
+function readLoaded(): Set<number> {
+  try {
+    return new Set(JSON.parse(window.localStorage.getItem(LOADED_KEY) || "[]") as number[]);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeLoaded(ids: Set<number>) {
+  try {
+    window.localStorage.setItem(LOADED_KEY, JSON.stringify([...ids].slice(-500)));
+  } catch {
+    /* storage unavailable: loading still works, it just cannot remember what was loaded */
+  }
+}
+
 interface FaxMed {
   drug_name?: string;
   strength?: string;
@@ -42,6 +60,7 @@ interface FaxMed {
   refills?: number;
   sig?: string;
   din?: string;
+  is_compound?: boolean;
 }
 interface FaxRow {
   mail_id: number;
@@ -50,8 +69,8 @@ interface FaxRow {
   page_image_url: string | null;
   ocr: {
     scripts?: Array<{
-      patient?: { full_name?: string; dob?: string };
-      prescriber?: { name?: string };
+      patient?: { full_name?: string; dob?: string; health_card_num?: string };
+      prescriber?: { name?: string; license_number?: string };
       medications?: FaxMed[];
       overall_confidence?: number;
     }>;
@@ -72,6 +91,7 @@ export default function Inbox() {
   const [rows, setRows] = React.useState<InboxRow[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [faxes, setFaxes] = React.useState<FaxRow[]>([]);
+  const [loadedFaxes, setLoadedFaxes] = React.useState<Set<number>>(() => readLoaded());
 
   const endpoint = `${settings.apiBaseUrl.replace(/\/$/, "")}/api/queue`;
   const headers = React.useMemo(
@@ -163,6 +183,44 @@ export default function Inbox() {
     if (!response.ok) throw new Error(`Server returned ${response.status}`);
   }
 
+  /** Put one OCR-read fax into Intake / Verify with everything the agent found filled in. */
+  function loadFax(fax: FaxRow, quiet: boolean): string {
+    const script = fax.ocr?.scripts?.[0];
+    const med = script?.medications?.[0];
+    const id = createManualScript({
+      full_name: script?.patient?.full_name || "UNKNOWN PATIENT",
+      dob: script?.patient?.dob || "",
+      health_card_num: script?.patient?.health_card_num || "",
+      prescriber_name: script?.prescriber?.name || "",
+      license_number: script?.prescriber?.license_number || "",
+      drug_name: med?.drug_name || "",
+      din: med?.din || "",
+      strength: med?.strength || "",
+      quantity: Number(med?.quantity) || 0,
+      refills: Number(med?.refills) || 0,
+      sig: med?.sig || "",
+      is_compound: Boolean(med?.is_compound),
+      source: "fax",
+      page_image_url: fax.page_image_url || undefined,
+      confidence: script?.overall_confidence,
+      quiet,
+    });
+    setLoadedFaxes((prev) => {
+      const next = new Set(prev).add(fax.mail_id);
+      writeLoaded(next);
+      return next;
+    });
+    return id;
+  }
+
+  const unloadedFaxes = faxes.filter((fax) => !loadedFaxes.has(fax.mail_id));
+
+  function loadAllFaxes() {
+    unloadedFaxes.forEach((fax) => loadFax(fax, true));
+    toast.success(`${unloadedFaxes.length} fax${unloadedFaxes.length === 1 ? "" : "es"} loaded into Intake`);
+    navigate("/app");
+  }
+
   async function loadIntoVerify(row: InboxRow) {
     try {
       const merged = (row.planned as { ocr_merged?: any } | null | undefined)?.ocr_merged;
@@ -222,13 +280,20 @@ export default function Inbox() {
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-5 p-4 lg:p-6">
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <InboxIcon className="h-4 w-4" /> Faxes read from Kroll Inbound Docs
-          </CardTitle>
-          <CardDescription>
-            Prescription faxes the agent already read, before staff open them: what it found on the page. Ads and cover sheets are left out.
-          </CardDescription>
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 pb-3">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <InboxIcon className="h-4 w-4" /> Faxes read from Kroll Inbound Docs
+            </CardTitle>
+            <CardDescription>
+              Prescription faxes the agent already read, before staff open them: what it found on the page. Ads and cover sheets are left out.
+            </CardDescription>
+          </div>
+          {unloadedFaxes.length > 0 && (
+            <Button size="sm" onClick={loadAllFaxes}>
+              Load all {unloadedFaxes.length} into Intake
+            </Button>
+          )}
         </CardHeader>
         <CardContent className="pt-0">
           {faxes.length === 0 ? (
@@ -260,6 +325,13 @@ export default function Inbox() {
                           <a href={fax.page_image_url} target="_blank" rel="noreferrer">
                             View fax
                           </a>
+                        </Button>
+                      )}
+                      {loadedFaxes.has(fax.mail_id) ? (
+                        <Badge variant="secondary">In Intake</Badge>
+                      ) : (
+                        <Button size="sm" onClick={() => navigate(`/app/verify/${loadFax(fax, false)}`)}>
+                          Load into Verify
                         </Button>
                       )}
                     </div>
