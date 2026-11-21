@@ -79,6 +79,9 @@ BATCH_SIZE = 50
 HEARTBEAT_EVERY_SEC = 300
 AGENT_CODE_VERSION = "1.3.0"     # reported in heartbeats so the dashboard shows which code is running
 RECHECK_EVERY_SEC = 60            # how often rows still being filled in by staff are re-read
+INBOUND_FAX_EVERY_SEC = 60        # how often Kroll's Inbound Docs (faxes) are checked
+INBOUND_FAX_PER_CYCLE = 5         # at most this many faxes are read per check (keeps OCR cost / time bounded)
+INBOUND_FAX_MAX_TRIES = 3
 COMPARE_EVERY_SEC = 600          # how often SHADOW looks for staff entries
 COMPARE_GIVE_UP_DAYS = 3         # an AUTO decision never entered by staff after this long is reported as such
 SPOOL_MAX_ATTEMPTS = 20          # then the item is parked as dead-letter
@@ -206,6 +209,12 @@ class AgentConfig:
         # (or never). Rows missing any of those are tracked as "incomplete" and re-read until they are
         # filled in, for at most this many hours; then they are judged as they are. 0 = judge at once.
         self.wait_hours: float = max(0.0, cp.getfloat("Agent", "WAIT_HOURS", fallback=24.0))
+        # Read faxes sitting in Kroll's Inbound Docs (before staff create a pending Rx) and OCR them in the cloud.
+        # Only faxes received in the last INBOUND_FAX_HOURS are read; INBOUND_FAX_IGNORE = comma list of sender
+        # numbers to skip (e.g. your own fax number). Needs the cloud connection.
+        self.inbound_fax: bool = cp.getboolean("Agent", "INBOUND_FAX", fallback=True)
+        self.inbound_fax_hours: float = max(1.0, cp.getfloat("Agent", "INBOUND_FAX_HOURS", fallback=24.0))
+        self.inbound_fax_ignore: List[str] = [x.strip() for x in cp.get("Agent", "INBOUND_FAX_IGNORE", fallback="").split(",") if x.strip()]
 
         self.db_server: str = cp.get("Database", "SERVER", fallback="localhost").strip()
         self.db_name: str = cp.get("Database", "DATABASE", fallback="Pharmacy").strip()
@@ -373,6 +382,11 @@ class LocalStore:
                     pending_rx_id INTEGER PRIMARY KEY,
                     pushed_at     TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS inbound_fax (     -- inbound fax (Kroll Mail id) already read, or given up on
+                    mail_id  INTEGER PRIMARY KEY,
+                    done     INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0
+                );
                 CREATE TABLE IF NOT EXISTS meta (
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -445,6 +459,34 @@ class LocalStore:
         try:
             conn.execute("INSERT OR IGNORE INTO learned_local(pending_rx_id) VALUES (?)", (pending_rx_id,))
             conn.commit()
+        finally:
+            conn.close()
+
+    # -- inbound faxes (Kroll Inbound Docs) -------------------------------------
+    def fax_done(self, mail_id: int) -> bool:
+        conn = self._connect()
+        try:
+            return conn.execute("SELECT 1 FROM inbound_fax WHERE mail_id = ? AND done = 1", (mail_id,)).fetchone() is not None
+        finally:
+            conn.close()
+
+    def fax_mark_done(self, mail_id: int) -> None:
+        conn = self._connect()
+        try:
+            conn.execute("INSERT INTO inbound_fax(mail_id, done, attempts) VALUES (?, 1, 0) "
+                         "ON CONFLICT(mail_id) DO UPDATE SET done = 1", (mail_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def fax_bump(self, mail_id: int) -> int:
+        """Count a failed attempt; returns the new number of attempts."""
+        conn = self._connect()
+        try:
+            conn.execute("INSERT INTO inbound_fax(mail_id, done, attempts) VALUES (?, 0, 1) "
+                         "ON CONFLICT(mail_id) DO UPDATE SET attempts = attempts + 1", (mail_id,))
+            conn.commit()
+            return conn.execute("SELECT attempts FROM inbound_fax WHERE mail_id = ?", (mail_id,)).fetchone()[0]
         finally:
             conn.close()
 
@@ -1617,6 +1659,22 @@ class CloudClient:
             return True, "", False
         return False, f"HTTP {resp.status_code}: {resp.text[:200]}", False
 
+    def push_fax(self, payload: Dict[str, Any]) -> Tuple[bool, str, Dict[str, Any]]:
+        """POST to /api/agent-fax: the cloud reads one inbound fax and says whether it is a prescription."""
+        try:
+            resp = self.session.post(self._sibling("agent-fax"), json=payload, timeout=OCR_TIMEOUT_SEC)
+        except requests.RequestException as exc:
+            return False, str(exc), {}
+        if not 200 <= resp.status_code < 300:
+            return False, f"HTTP {resp.status_code}: {resp.text[:200]}", {}
+        try:
+            body = resp.json()
+        except ValueError:
+            return False, "bad response", {}
+        if not body.get("ok"):
+            return False, str(body.get("ocr_error") or "cloud could not read the fax"), body
+        return True, "", body
+
     def push_learn(self, payload: Dict[str, Any]) -> bool:
         try:
             resp = self.session.post(self._sibling("learn"), json=payload, timeout=CLOUD_TIMEOUT_SEC)
@@ -2022,6 +2080,7 @@ class PharmFlowAgent:
         self._last_heartbeat = 0.0
         self._last_compare = -COMPARE_EVERY_SEC
         self._last_recheck = -RECHECK_EVERY_SEC
+        self._last_inbound = -INBOUND_FAX_EVERY_SEC
         self._running = True
         self.log.info(
             "Config loaded | mode=%s | poll=%ss | db_user=%s | api=%s",
@@ -2123,6 +2182,56 @@ class PharmFlowAgent:
                 self.log.warning("Early fax read failed for PendingRxId=%s (%s) - will retry", pid, err)
         except Exception as exc:
             self.log.warning("Early fax read skipped for PendingRxId=%s: %s", row.get("PendingRxId"), exc)
+
+    def _poll_inbound_faxes(self) -> None:
+        """Read faxes in Kroll's Inbound Docs (before staff make a pending Rx) and let the cloud OCR them.
+        Read-only on Kroll. Every fax is tried at most INBOUND_FAX_MAX_TRIES times. Never raises."""
+        if not (self.cfg.inbound_fax and self.cfg.cloud_enabled):
+            return
+        if time.monotonic() - self._last_inbound < INBOUND_FAX_EVERY_SEC:
+            return
+        self._last_inbound = time.monotonic()
+        try:
+            faxes = fetch_inbound_faxes(self.db.ensure(), 0, 50, self.cfg.inbound_fax_hours)
+        except Exception as exc:
+            self.log.warning("Could not list inbound faxes: %s", exc)
+            return
+        done = 0
+        for fax in reversed(faxes):                              # oldest first
+            if done >= INBOUND_FAX_PER_CYCLE:
+                break
+            mid = int(fax["mail_id"])
+            if self.store.fax_done(mid):
+                continue
+            sender = str(fax["from"] or "")
+            if any(n and n in sender for n in self.cfg.inbound_fax_ignore):
+                self.store.fax_mark_done(mid)
+                continue
+            done += 1
+            try:
+                raw = load_mail_attachment_bytes(self.db.ensure(), fax["content_id"])
+                url = bytes_to_data_url(raw) if raw else None
+                if not url:
+                    self.log.warning("Inbound fax Mail=%s has no readable image; skipped", mid)
+                    self.store.fax_mark_done(mid)
+                    continue
+                ok, err, body = self.cloud.push_fax({
+                    "store_id": self.cfg.store_id, "mail_id": mid, "received": str(fax["received"]),
+                    "from": sender[:80], "page_images": [url],
+                    "agent": {"version": AGENT_CODE_VERSION, "hostname": socket.gethostname()},
+                })
+            except Exception as exc:
+                ok, err, body = False, str(exc), {}
+            if ok:
+                self.store.fax_mark_done(mid)
+                self.log.info("Inbound fax Mail=%s from %s read: %s%s", mid, sender[:30],
+                              "PRESCRIPTION" if body.get("is_prescription") else "not a prescription",
+                              f" ({body.get('summary')})" if body.get("summary") else "")
+            else:
+                tries = self.store.fax_bump(mid)
+                self.log.warning("Inbound fax Mail=%s read failed (%s) - try %d of %d", mid, err, tries, INBOUND_FAX_MAX_TRIES)
+                if tries >= INBOUND_FAX_MAX_TRIES:
+                    self.store.fax_mark_done(mid)
 
     def _hint_din_from_kroll(self, pending_id: int) -> None:
         """Fax had no DIN? Look the drug up in Kroll's own drug table and tell the cloud what we found."""
@@ -2323,6 +2432,7 @@ class PharmFlowAgent:
                 top = max(int(r["PendingRxId"]) for r in rows if r.get("PendingRxId") is not None)
                 self.store.set_watermark(max(top, watermark))
             self._recheck_incomplete()
+            self._poll_inbound_faxes()
             self._flush_spool()
             self._compare_with_staff()
             self._learn_background()
@@ -2459,17 +2569,23 @@ def shadow_report(cfg: AgentConfig, out_path: Path) -> int:
     return 0 if verdict_ok else 3
 
 
-def fetch_inbound_faxes(conn, after_mail_id: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
+def fetch_inbound_faxes(conn, after_mail_id: int = 0, limit: int = 50,
+                        since_hours: Optional[float] = None) -> List[Dict[str, Any]]:
     """Inbound fax list (Kroll "Inbound Docs"): dbo.Mail rows with MessageType 19 from the fax service (SRFax),
     each with its image in dbo.MailAttachment -> MailAttachmentContent. SELECT only, newest first."""
     sql = (
         "SELECT TOP (?) m.Id, m.DateCreated, m.MailFrom, a.Id, a.MailAttachmentContentId, a.ContentMimeType "
         "FROM dbo.Mail m WITH (NOLOCK) JOIN dbo.MailAttachment a WITH (NOLOCK) ON a.MailId = m.Id "
-        "WHERE m.MessageType = 19 AND m.MessageId LIKE 'SRFax.%' AND m.Id > ? ORDER BY m.Id DESC"
+        "WHERE m.MessageType = 19 AND m.MessageId LIKE 'SRFax.%' AND m.Id > ? "
+        + ("AND m.DateCreated >= DATEADD(minute, -?, GETDATE()) " if since_hours else "")
+        + "ORDER BY m.Id DESC"
     )
+    params: List[Any] = [int(limit), int(after_mail_id)]
+    if since_hours:
+        params.append(int(since_hours * 60))
     cur = conn.cursor()
     try:
-        cur.execute(sql, (int(limit), int(after_mail_id)))
+        cur.execute(sql, tuple(params))
         rows = cur.fetchall()
     finally:
         cur.close()

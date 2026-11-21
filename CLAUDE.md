@@ -25,9 +25,10 @@ Class/function/CLI/endpoint/route lists are in the auto-generated map at the bot
 ## Cloud side (details)
 - `api/sync-queue.js` agent -> cloud (header `x-api-key` = env `AGENT_API_KEY`): rows, heartbeat, shadow_result.
 - `api/agent-rx.js` fax OCR (Anthropic) merged with SQL fields; applies learned sig mappings (hit_count >= 2).
+- `api/agent-fax.js` inbound faxes: agent reads Kroll Inbound Docs (dbo.Mail MessageType 19 + MailAttachment -> MailAttachmentContent, read-only), cloud OCR classifies prescription vs other, stored in `inbound_faxes`.
 - `api/live.js` data for the Live page (header `x-access-token` = `APP_ACCESS_TOKEN` or `EXTRACT_ACCESS_TOKEN`).
 - `api/learn.js`, `server/learning.js` cloud-side learning. Tests: `pnpm test`.
-- Tables: agent_sync_queue, extraction_feedback, learned_mappings (see `supabase/migrations`).
+- Tables: agent_sync_queue, inbound_faxes, extraction_feedback, learned_mappings (see `supabase/migrations`).
 - Deploy = push to `main` (Vercel auto-builds). Env vars live in Vercel; see `.env.example` and `docs/DEPLOY.md`.
 
 ## Frontend conventions
@@ -55,15 +56,16 @@ Class/function/CLI/endpoint/route lists are in the auto-generated map at the bot
 ### helper/flow.py
 Classes and their methods (grep the name to find the code):
 - `AgentConfig`
-- `LocalStore` - Tracks the watermark / processed ids and spools failed cloud payloads.: _connect, _init_schema, get_watermark, has_watermark, set_watermark, is_processed, mark_processed, has_learned, mark_learned, has_early, mark_early, add_incomplete, load_incomplete, drop_incomplete, count_incomplete, record_decision, load_uncompared, mark_compared, load_decisions, spool_payload, has_spooled, requeue_dead, load_spool, delete_spool_item, bump_spool_attempt
+- `LocalStore` - Tracks the watermark / processed ids and spools failed cloud payloads.: _connect, _init_schema, get_watermark, has_watermark, set_watermark, is_processed, mark_processed, has_learned, mark_learned, fax_done, fax_mark_done, fax_bump, has_early, mark_early, add_incomplete, load_incomplete, drop_incomplete, count_incomplete, record_decision, load_uncompared, mark_compared, load_decisions, spool_payload, has_spooled, requeue_dead, load_spool, delete_spool_item, bump_spool_attempt
 - `KrollDB`: _connection_string, _build_query, connect, ensure, fetch_pending, _din8, _resolve_drug_schema, drug_by_id, search_drugs, attach_image, fetch_rx_history, max_rx_id, fetch_rx_by_id, fetch_by_ids, discover, max_pending_id, profile_table, fetch_actual_rx, schema_report, close
-- `CloudClient`: push, _sibling, push_rx, push_learn
+- `CloudClient`: push, _sibling, push_rx, push_fax, push_learn
 - `Learner` - Two learning modes sharing one permanent store.: _conn, _init, _meta, _set_meta, _get_rule, _bump_rule, _drop_rule, _keys, _record, learn_from_staff, apply, learn_from_sql, suggest_sig, restore_from_cloud, report
-- `PharmFlowAgent`: _process_row, _early_ocr, _hint_din_from_kroll, _flush_spool, _compare_with_staff, _learn_background, _heartbeat, apply_start_mode, _recheck_incomplete, run_once, run
+- `PharmFlowAgent`: _process_row, _early_ocr, _poll_inbound_faxes, _hint_din_from_kroll, _flush_spool, _compare_with_staff, _learn_background, _heartbeat, apply_start_mode, _recheck_incomplete, run_once, run
 - module functions: setup_logging, jsonable, din_check_ok, validate_row, _present, core_complete, is_blank_stub, planned_entry, _pdf_first_page, _try_pil_jpeg, bytes_to_data_url, _q, _score, _looks_like_image, binary_candidates, _probe, auto_find, native_check, find_image_source, _decode_content, _kroll_native, fetch_image_bytes, attach_page_image, build_payload, norm_sig, _sig_risk_tokens, sig_fix_is_safe, field_matches, _norm, shadow_report, fetch_inbound_faxes, load_mail_attachment_bytes, main
 CLI flags: `--discover` list DB tables/columns and exit | `--skip-backlog` ignore every row already in the pending table; process only new ones | `--profile` print per-column fill counts (no values) and exit | `--shadow-report` compare shadow decisions with what staff entered; prints go-live verdict | `--schema-report` write schema_report | `--find-images` find which table holds the fax images for recent pending Rx and exit | `--gen-key` print a new random agent API key (put it in config | `--requeue-dead` retry payloads that were parked after failed uploads (PendingRxId >= FROM_ID), then exit | `--learning-report` show what the agent has learned so far (no patient data) and exit | `--inbound-test` list the newest N inbound faxes (Kroll Inbound Docs) and check their images load, then exit | `--test` connect, poll once, print counts, exit
 
 ### api/ (Vercel functions)
+- `api/agent-fax.js` - POST /api/agent-fax   (x-api-key = AGENT_API_KEY)
 - `api/agent-rx.js`
 - `api/daily-report.js` - POST /api/daily-report   { report_id }
 - `api/din-lookup.js` - GET /api/din-lookup?name=fluoxetine%2010mg%20capsule&strength=10%20mg
@@ -72,14 +74,14 @@ CLI flags: `--discover` list DB tables/columns and exit | `--skip-backlog` ignor
 - `api/live.js` - /api/live — data for the in-app "Live" dashboard (no patient names are ever returned).
 - `api/queue.js` - /api/queue — prescriptions synced from Kroll by flow.py (+ OCR when ScriptImage present).
 - `api/sync-queue.js` - /api/sync-queue
-- `server/` shared logic: dpd.js, jsonrepair.js, learning.js
+- `server/` shared logic: agent-common.js, dpd.js, jsonrepair.js, learning.js
 
 ### Web app routes (src/App.tsx)
 `/` -> Landing, `/login` -> Login, `(index)` -> Index, `verify` -> Verify, `verify/:scriptId` -> Verify, `live` -> Live, `inbox` -> Inbox, `queue` -> Queue, `settings` -> Settings, `*` -> NotFound
 Components: AppShell, Confidence, ConfidenceChart, ConfidenceField, DocumentViewer, HelperStatus, ManualEntryDialog, MedicationCard, PmsSelector, PushDialog, QueueTable, QuickActions, RequireAuth, ScriptWorkspace, StatCard, UploadDropzone
 
 ### Database and scripts
-Supabase migrations (8), newest last: 20261103_shadow_daily_report.sql, 20261104_extraction_learning.sql, 20261104_live_dashboard.sql, 20261105_multi_tenant_security.sql, 20261106_script_image_ocr.sql, 20261119_learning_loop.sql
+Supabase migrations (9), newest last: 20261104_extraction_learning.sql, 20261104_live_dashboard.sql, 20261105_multi_tenant_security.sql, 20261106_script_image_ocr.sql, 20261119_learning_loop.sql, 20261121_inbound_faxes.sql
 package.json scripts: `dev`, `build`, `preview`, `test`
 Docs: `docs/DEPLOY.md`, `docs/HELPER_SETUP.md`, `docs/LIVE_DASHBOARD.md`, `docs/SECURITY.md`, `docs/SETUP.md`, `docs/architecture.md`
 

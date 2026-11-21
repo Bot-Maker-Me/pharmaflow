@@ -47,6 +47,21 @@ interface LiveRow {
   compared_at: string | null;
 }
 
+interface InboundFaxes {
+  last_24h: number;
+  prescriptions_24h: number;
+  items: Array<{
+    mail_id: number;
+    received: string | null;
+    from: string | null;
+    doc_type: string | null;
+    is_prescription: boolean;
+    summary: string | null;
+    drug: string | null;
+    confidence: number | null;
+  }>;
+}
+
 const POLL_MS = 3000;
 
 function ago(iso: string | null | undefined, now: number): string {
@@ -74,6 +89,7 @@ export default function Live() {
   const { settings } = useAppStore();
   const [stats, setStats] = React.useState<LiveStats | null>(null);
   const [rows, setRows] = React.useState<LiveRow[]>([]);
+  const [faxes, setFaxes] = React.useState<InboundFaxes | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [paused, setPaused] = React.useState(false);
   const [now, setNow] = React.useState(Date.now());
@@ -95,8 +111,9 @@ export default function Live() {
       const response = await fetch(endpoint, { headers });
       if (response.status === 401) throw new Error("Wrong API access token (Settings)");
       if (!response.ok) throw new Error(`Server returned ${response.status}`);
-      const data = (await response.json()) as { stats: LiveStats; rows: LiveRow[] };
+      const data = (await response.json()) as { stats: LiveStats; rows: LiveRow[]; inbound_faxes?: InboundFaxes };
       setStats(data.stats);
+      setFaxes(data.inbound_faxes ?? null);
       setRows(data.rows);
       setError(null);
       const ids = new Set(data.rows.map((r) => r.id));
@@ -285,6 +302,36 @@ export default function Live() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle>Inbound faxes</CardTitle>
+          <CardDescription>
+            Faxes read from Kroll&apos;s Inbound Docs before staff open them: {faxes?.last_24h ?? 0} in the last 24h,{" "}
+            {faxes?.prescriptions_24h ?? 0} look like prescriptions. Ads and reports are listed but not treated as prescriptions.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <ul className="divide-y divide-pf-rule border border-pf-rule bg-card">
+            {(faxes?.items ?? []).map((f) => (
+              <li key={f.mail_id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="w-28 font-data text-muted-foreground tabular-nums">{f.received ?? "–"}</span>
+                  <span className="truncate font-data font-medium">{f.from ?? "unknown"}</span>
+                  <span className="truncate text-muted-foreground">{f.drug ?? f.summary ?? ""}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {f.confidence != null && <span className="font-data text-muted-foreground">{Math.round(f.confidence * 100)}%</span>}
+                  {f.is_prescription ? <Badge variant="success">PRESCRIPTION</Badge> : <Badge variant="outline">OTHER</Badge>}
+                </div>
+              </li>
+            ))}
+            {(faxes?.items.length ?? 0) === 0 && (
+              <li className="p-6 text-center text-sm text-muted-foreground">No inbound faxes read yet.</li>
+            )}
+          </ul>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="pb-2">

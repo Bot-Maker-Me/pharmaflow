@@ -14,6 +14,11 @@ STORE_ID = default
 START_MODE = NEW_ONLY
 REQUIRE_PLAN = false
 WAIT_HOURS = 24
+# Read faxes in Kroll's Inbound Docs (before staff open them) and OCR them in the cloud. Read-only.
+INBOUND_FAX = true
+INBOUND_FAX_HOURS = 24
+# Comma list of sender numbers to skip (e.g. your own fax number). Empty = read all.
+INBOUND_FAX_IGNORE =
 
 [Database]
 ; Connection to the Kroll SQL Server (read-only login recommended)
