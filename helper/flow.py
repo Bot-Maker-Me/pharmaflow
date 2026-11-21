@@ -16,6 +16,7 @@ Commands
   python flow.py --test             one connection + one poll, then exit
   python flow.py --gen-key          print a new random agent API key
   python flow.py --learning-report  show what has been learned so far
+  python flow.py --requeue-dead N   retry payloads parked after failed uploads (PendingRxId >= N)
   python flow.py --discover         list tables/columns in the Kroll DB (fix [Schema] mapping)
   python flow.py --schema-report    write schema_report.txt (columns only, no PHI)
   python flow.py --find-images      find which table holds the fax images
@@ -561,6 +562,32 @@ class LocalStore:
         finally:
             conn.close()
         self.log.warning("Spooled PendingRxId=%s for retry", pending_rx_id)
+
+    def has_spooled(self, pending_rx_id: int) -> bool:
+        """True while a live (not dead-lettered) payload for this Rx still waits to reach the cloud."""
+        conn = self._connect()
+        try:
+            return conn.execute("SELECT 1 FROM spool WHERE pending_rx_id = ? AND dead = 0 LIMIT 1",
+                                (pending_rx_id,)).fetchone() is not None
+        finally:
+            conn.close()
+
+    def requeue_dead(self, from_id: int) -> Tuple[int, int]:
+        """Give parked payloads (PendingRxId >= from_id) another chance and let their staff comparison run again.
+        Learning is never repeated: has_learned() still guards every Rx. Returns (revived, comparisons_reset)."""
+        conn = self._connect()
+        try:
+            ids = [r[0] for r in conn.execute(
+                "SELECT DISTINCT pending_rx_id FROM spool WHERE dead = 1 AND pending_rx_id >= ?", (from_id,))]
+            conn.execute("UPDATE spool SET dead = 0, attempts = 0 WHERE dead = 1 AND pending_rx_id >= ?", (from_id,))
+            revived = conn.total_changes
+            reset = 0
+            for rid in ids:
+                reset += conn.execute("DELETE FROM shadow_compared WHERE pending_rx_id = ?", (rid,)).rowcount
+            conn.commit()
+            return revived, reset
+        finally:
+            conn.close()
 
     def load_spool(self, limit: int = 30) -> List[sqlite3.Row]:
         conn = self._connect()
@@ -2139,6 +2166,10 @@ class PharmFlowAgent:
                 self.log.info("Spool item %s (PendingRxId=%s) uploaded", item["id"], item["pending_rx_id"])
                 continue
 
+            if err.startswith("HTTP 401"):
+                # wrong/rotated agent key: the whole queue is fine, so keep it intact and wait for the key to be fixed
+                self.log.warning("Cloud rejected the agent key (401) - keeping %d spooled payload(s); fix API_KEY / AGENT_API_KEY", len(items))
+                break
             dead = self.store.bump_spool_attempt(item["id"], err, permanent)
             if dead:
                 self.log.error("Spool item %s parked as dead-letter: %s", item["id"], err)
@@ -2158,6 +2189,8 @@ class PharmFlowAgent:
         now = dt.datetime.now(dt.timezone.utc)
         skipped = 0
         for d in self.store.load_uncompared(limit=100):
+            if self.cfg.cloud_enabled and self.store.has_spooled(d["pending_rx_id"]):
+                continue                                 # the cloud does not have this Rx yet; compare after it uploads
             planned = json.loads(d["planned"])
             planned["pending_rx_id"] = d["pending_rx_id"]
             # Pending rows rarely carry a usable date, so only accept staff entries filled on or after
@@ -2440,6 +2473,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="find which table holds the fax images for recent pending Rx and exit")
     parser.add_argument("--gen-key", action="store_true",
                         help="print a new random agent API key (put it in config.ini [Cloud] API_KEY and Vercel AGENT_API_KEY)")
+    parser.add_argument("--requeue-dead", type=int, metavar="FROM_ID",
+                        help="retry payloads that were parked after failed uploads (PendingRxId >= FROM_ID), then exit")
     parser.add_argument("--learning-report", action="store_true",
                         help="show what the agent has learned so far (no patient data) and exit")
     parser.add_argument("--test", action="store_true", help="connect, poll once, print counts, exit")
@@ -2466,6 +2501,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         LocalStore(SQLITE_PATH, logger).set_watermark(top)
         print(f"Done: rows up to PendingRxId={top} will be ignored. Restart the agent (and press "
               "'Start shadow week' on the Live dashboard).")
+        return 0
+
+    if args.requeue_dead is not None:
+        logger = setup_logging(cfg.agent_version)
+        revived, reset = LocalStore(SQLITE_PATH, logger).requeue_dead(args.requeue_dead)
+        print(f"Re-queued {revived} parked payload(s); {reset} staff comparison(s) will run again once they upload. "
+              "The running agent picks them up within a minute; no restart needed.")
         return 0
 
     if args.learning_report:

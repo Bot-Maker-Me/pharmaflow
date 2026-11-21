@@ -88,6 +88,7 @@ with the rest of the folder) and mirrored to the cloud.
    auto-applied.
 
 ```powershell
-python flow.py --learning-report     # what has been learned so far
+python flow.py --requeue-dead N` (retry payloads that were parked after failed uploads, PendingRxId >= N)
+- `python flow.py --learning-report     # what has been learned so far
 python flow.py --gen-key             # new random agent API key
 ```
