@@ -14,15 +14,35 @@ echo  -------------------------------------------------
 echo  Have ready: Kroll SQL user + password, and this pharmacy's PharmFlow key.
 echo.
 
-where python >nul 2>nul
-if errorlevel 1 (
-  echo  Python is not installed. Installing it now...
+rem ---- find a REAL Python (the Windows Store shortcut does not count) ----
+set "PY="
+call :trypy "py -3"
+if not defined PY call :trypy "python"
+if not defined PY call :knownpy
+if not defined PY (
+  echo  Python is not installed. Installing it now, please wait...
   winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
+  call :knownpy
+)
+if not defined PY (
   echo.
-  echo  Python was installed. CLOSE this window and double-click this file again.
+  echo  Could not install Python automatically.
+  echo  Install it from https://www.python.org/downloads/ ^(tick "Add python.exe to PATH"^),
+  echo  then double-click this file again.
   pause
   exit /b
 )
+goto havepy
+:trypy
+%~1 -c "import sys" >nul 2>nul
+if not errorlevel 1 set "PY=%~1"
+exit /b
+:knownpy
+for %%P in ("%LocalAppData%\Programs\Python\Python312\python.exe" "%ProgramFiles%\Python312\python.exe" "%LocalAppData%\Programs\Python\Python313\python.exe" "%ProgramFiles%\Python313\python.exe") do (
+  if exist %%P if not defined PY set PY="%%~P"
+)
+exit /b
+:havepy
 
 if not exist "%DEST%" mkdir "%DEST%"
 for %%F in (flow.py setup_server.py config.ini.example requirements.txt install_service.ps1) do (
@@ -35,7 +55,7 @@ for %%F in (flow.py setup_server.py config.ini.example requirements.txt install_
 )
 
 cd /d "%DEST%"
-if not exist ".venv\Scripts\python.exe" python -m venv .venv
+if not exist ".venv\Scripts\python.exe" %PY% -m venv .venv
 echo  Installing parts (needs internet)...
 ".venv\Scripts\python.exe" -m pip install -q -r requirements.txt
 if errorlevel 1 (
