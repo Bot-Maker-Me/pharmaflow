@@ -345,7 +345,16 @@ def _autofill_kroll(t: Typist, data: dict) -> str:
         t.press("enter")
         t.wait()
     else:
-        log.info("KROLL no DIN supplied (compound) - skipping product search")
+        # No DIN on the fax: open Kroll's drug search with the drug name and STOP, because
+        # typing the sig/quantity now would land in the wrong box. Staff pick the drug in Kroll.
+        name = data.get("drug_name", "")
+        if name:
+            t.press("f5")
+            t.paste(name)
+            t.press("enter")
+            return ("Patient and doctor entered. Drug search opened for '" + name + "' - pick the "
+                    "drug in Kroll; sig and quantity were NOT typed (no DIN).")
+        return "Patient and doctor entered. No DIN or drug name - nothing typed for the drug, sig or quantity."
 
     t.paste(data["sig_text"])
     t.press("tab")
@@ -404,7 +413,7 @@ DRIVERS: Dict[str, Callable[[Typist, dict], str]] = {
 
 def validate_data(data: dict) -> Dict[str, str]:
     clean: Dict[str, str] = {}
-    for key in ("patient_lookup", "prescriber_license", "din_code", "quantity", "sig_text"):
+    for key in ("patient_lookup", "prescriber_license", "din_code", "drug_name", "quantity", "sig_text"):
         value = data.get(key, "")
         value = "" if value is None else str(value).strip()
         if len(value) > MAX_FIELD_LEN:

@@ -15,6 +15,7 @@ export interface HelperPayload {
     patient_lookup: string;
     prescriber_license: string;
     din_code: string;
+    drug_name: string;
     quantity: string;
     sig_text: string;
   };
@@ -47,6 +48,7 @@ export function buildHelperPayload(script: Script, medIndex: number, pmsId: PmsI
       patient_lookup: patientLookup(script.patient),
       prescriber_license: script.prescriber.license_number,
       din_code: medication?.is_compound ? "" : medication?.din ?? "",
+      drug_name: [medication?.drug_name, medication?.strength].filter(Boolean).join(" ").trim(),
       quantity: String(medication?.quantity ?? ""),
       sig_text: toPmsSig(medication?.sig ?? ""),
     },
