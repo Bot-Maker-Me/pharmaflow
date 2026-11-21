@@ -66,7 +66,7 @@ DEFAULT_ORIGINS = [
 ]
 
 DEFAULT_WINDOW_HINTS: Dict[str, str] = {
-    "KROLL": "kroll",
+    "KROLL": "fill.exe",
     "PROPELRX": "propel",
     "WINRX": "winrx",
 }
@@ -136,11 +136,42 @@ def _require_backend() -> None:
         )
 
 
+_api_ready = False
+
+
+def _win_api():
+    """ctypes user32/kernel32 with proper 64-bit handle types (done once)."""
+    global _api_ready
+    import ctypes
+    from ctypes import wintypes
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    if not _api_ready:
+        H, B, D, I = wintypes.HWND, wintypes.BOOL, wintypes.DWORD, ctypes.c_int
+        user32.GetForegroundWindow.restype = H
+        user32.GetForegroundWindow.argtypes = []
+        user32.IsWindowVisible.argtypes, user32.IsWindowVisible.restype = [H], B
+        user32.IsIconic.argtypes, user32.IsIconic.restype = [H], B
+        user32.ShowWindow.argtypes, user32.ShowWindow.restype = [H, I], B
+        user32.BringWindowToTop.argtypes, user32.BringWindowToTop.restype = [H], B
+        user32.SetForegroundWindow.argtypes, user32.SetForegroundWindow.restype = [H], B
+        user32.GetWindowTextLengthW.argtypes, user32.GetWindowTextLengthW.restype = [H], I
+        user32.GetWindowTextW.argtypes, user32.GetWindowTextW.restype = [H, wintypes.LPWSTR, I], I
+        user32.GetWindowThreadProcessId.argtypes = [H, ctypes.POINTER(D)]
+        user32.GetWindowThreadProcessId.restype = D
+        user32.AttachThreadInput.argtypes, user32.AttachThreadInput.restype = [D, D, B], B
+        kernel32.OpenProcess.argtypes = [D, B, D]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, D, wintypes.LPWSTR, ctypes.POINTER(D)]
+        _api_ready = True
+    return user32, kernel32
+
+
 def foreground_window_title() -> str:
     if sys.platform != "win32":
         return ""
     import ctypes
-    user32 = ctypes.windll.user32
+    user32, _ = _win_api()
     hwnd = user32.GetForegroundWindow()
     length = user32.GetWindowTextLengthW(hwnd)
     buf = ctypes.create_unicode_buffer(length + 1)
@@ -148,16 +179,16 @@ def foreground_window_title() -> str:
     return buf.value
 
 
-def foreground_process_name() -> str:
-    """Program file name of the front window, e.g. 'chrome.exe' (empty if unknown)."""
+def foreground_process_name(hwnd=None) -> str:
+    """Program file name of a window (default: the front one), e.g. 'chrome.exe' (empty if unknown)."""
     if sys.platform != "win32":
         return ""
     try:
         import ctypes
         from ctypes import wintypes
-        user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+        user32, kernel32 = _win_api()
         pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ctypes.byref(pid))
+        user32.GetWindowThreadProcessId(hwnd or user32.GetForegroundWindow(), ctypes.byref(pid))
         handle = kernel32.OpenProcess(0x1000, False, pid.value)   # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
             return ""
@@ -186,22 +217,77 @@ def _title_matches(title: str, hint: str) -> bool:
     return bool(low) and any(h.strip() and h.strip() in low for h in hint.split(","))
 
 
+def _find_window(hint: str):
+    """Handle of a visible top-level window whose title or program name matches `hint` (or None)."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    user32, _ = _win_api()
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _each(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        exe = foreground_process_name(hwnd)
+        if _title_matches(f"{buf.value} | {exe}", hint):
+            found.append(hwnd)
+            return False
+        return True
+
+    user32.EnumWindows(_each, 0)
+    return found[0] if found else None
+
+
+def _bring_to_front(hwnd) -> None:
+    """Un-minimise a window and make it the front window (what clicking it would do)."""
+    user32, kernel32 = _win_api()
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)            # SW_RESTORE
+    user32.keybd_event(0x12, 0, 0, 0)         # tap Alt: Windows then allows the focus change
+    user32.keybd_event(0x12, 0, 2, 0)
+    fg_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)  # thread id
+    my_thread = kernel32.GetCurrentThreadId()
+    if fg_thread and fg_thread != my_thread:
+        user32.AttachThreadInput(my_thread, fg_thread, True)
+    user32.BringWindowToTop(hwnd)
+    user32.SetForegroundWindow(hwnd)
+    if fg_thread and fg_thread != my_thread:
+        user32.AttachThreadInput(my_thread, fg_thread, False)
+
+
 def _check_window(target: str) -> None:
     if not SETTINGS.require_window_check or SETTINGS.dry_run:
         return
     hint = SETTINGS.window_hints.get(target, "")
-    # After clicking Push in the browser, the browser is in front. Give staff a few
-    # seconds to click into Kroll before giving up.
+    # After pressing Push in the browser, the browser is in front: bring the pharmacy
+    # program to the front by itself (staff can also click it), then check.
     deadline = time.time() + SETTINGS.wait_for_window
     title = foreground_window_info()
     while not _title_matches(title, hint) and time.time() < deadline:
-        time.sleep(0.3)
+        hwnd = _find_window(hint)
+        if hwnd:
+            try:
+                _bring_to_front(hwnd)
+            except Exception:  # noqa: BLE001
+                log.exception("could not focus window")
+            time.sleep(0.5)
+        else:
+            time.sleep(0.5)
         title = foreground_window_info()
+    if _title_matches(title, hint):
+        time.sleep(0.3)                       # let the window finish coming up before typing
     if not _title_matches(title, hint):
         seen = (title or "").strip()[:90] or "unknown"
         raise WrongWindow(
-            f"Kroll was not the front window (it was '{seen}'; expected a title containing "
-            f"'{hint}'). Click into Kroll within {int(SETTINGS.wait_for_window)} seconds after pressing Push."
+            f"Could not bring Kroll to the front (front window is '{seen}'; looking for '{hint}'). "
+            "Make sure Kroll is open on this PC, then press Push again."
         )
 
 

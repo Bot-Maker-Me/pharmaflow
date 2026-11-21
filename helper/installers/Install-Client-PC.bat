@@ -59,21 +59,14 @@ if exist "%DEST%\config.ini" goto havecfg
 echo.
 set "TOKEN="
 set /p "TOKEN=  Type the Helper password (same one you put in PharmFlow Settings): "
-echo.
-echo  Now open Kroll and click on it. In 5 seconds I will read its window name.
-echo.
-".venv\Scripts\python.exe" workstation_helper.py --show-window > "%TEMP%\pf_title.txt" 2>&1
-type "%TEMP%\pf_title.txt"
-echo.
-set "TITLE="
-set /p "TITLE=  Type the window name you see above (a word that is always in it, e.g. Start Screen): "
 (
 echo [Helper]
 echo TOKEN = %TOKEN%
-echo WINDOW_KROLL = %TITLE%
 echo WAIT_FOR_WINDOW_SEC = 10
 ) > "%DEST%\config.ini"
 :havecfg
+rem old versions asked for a window name; now Kroll (Fill.exe) is found automatically
+powershell -NoProfile -Command "$p='%DEST%\config.ini'; (Get-Content $p) | Where-Object { $_ -notmatch '^\s*WINDOW_KROLL' } | Set-Content $p"
 
 rem start automatically when this PC logs in
 set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
