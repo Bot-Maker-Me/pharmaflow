@@ -364,6 +364,9 @@ class LocalStore:
                     pending_rx_id INTEGER PRIMARY KEY,
                     first_seen    TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS learned_local (    -- staff fixes already counted: a retry must never count twice
+                    pending_rx_id INTEGER PRIMARY KEY
+                );
                 CREATE TABLE IF NOT EXISTS early_ocr (       -- fax already sent to the waiting list before staff filled it in
                     pending_rx_id INTEGER PRIMARY KEY,
                     pushed_at     TEXT NOT NULL
@@ -424,6 +427,21 @@ class LocalStore:
                 "INSERT OR IGNORE INTO processed (pending_rx_id, processed_at) VALUES (?, ?)",
                 (pending_rx_id, dt.datetime.now(dt.timezone.utc).isoformat()),
             )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def has_learned(self, pending_rx_id: int) -> bool:
+        conn = self._connect()
+        try:
+            return conn.execute("SELECT 1 FROM learned_local WHERE pending_rx_id = ?", (pending_rx_id,)).fetchone() is not None
+        finally:
+            conn.close()
+
+    def mark_learned(self, pending_rx_id: int) -> None:
+        conn = self._connect()
+        try:
+            conn.execute("INSERT OR IGNORE INTO learned_local(pending_rx_id) VALUES (?)", (pending_rx_id,))
             conn.commit()
         finally:
             conn.close()
@@ -2110,6 +2128,7 @@ class PharmFlowAgent:
         self._last_compare = time.monotonic()
 
         now = dt.datetime.now(dt.timezone.utc)
+        skipped = 0
         for d in self.store.load_uncompared(limit=100):
             planned = json.loads(d["planned"])
             planned["pending_rx_id"] = d["pending_rx_id"]
@@ -2125,7 +2144,8 @@ class PharmFlowAgent:
             age = now - dt.datetime.fromisoformat(d["decided_at"])
             if not actual and age < dt.timedelta(days=COMPARE_GIVE_UP_DAYS):
                 continue                                 # staff have not entered it yet
-            if actual and self.learner:
+            if actual and self.learner and not self.store.has_learned(d["pending_rx_id"]):
+                self.store.mark_learned(d["pending_rx_id"])   # first, so a failed upload below can never count it twice
                 try:
                     fixes = self.learner.learn_from_staff(planned, actual)
                     if fixes:
@@ -2141,11 +2161,15 @@ class PharmFlowAgent:
                     "actual": actual or None,
                     "field_match": field_matches(planned, actual, r) if actual else None,
                 }
-                ok, err, _ = self.cloud.push(result)
+                ok, err, permanent = self.cloud.push(result)
                 if not ok:
-                    self.log.warning("Could not upload comparison for PendingRxId=%s: %s", d["pending_rx_id"], err)
-                    return
+                    if not permanent:                  # network / server trouble: try again next cycle
+                        self.log.warning("Could not upload comparison for PendingRxId=%s: %s", d["pending_rx_id"], err)
+                        return
+                    skipped += 1                       # e.g. 404: the cloud has no waiting-list entry for this old Rx
             self.store.mark_compared(d["pending_rx_id"])
+        if skipped:
+            self.log.info("Skipped %d comparison(s) the cloud has no entry for (old prescriptions); learning from them was kept locally", skipped)
 
     def _learn_background(self) -> None:
         """Mode 1: quietly absorb finished prescriptions from Kroll SQL (read-only)."""
