@@ -82,6 +82,10 @@ lic_num = Licence
 ALLOWED_ORIGINS = http://localhost:5173,https://pharmaflow-swart.vercel.app
 TOKEN =
 REQUIRE_WINDOW_CHECK = true
+; The helper only types when the active window title contains this text. Find yours with:
+;   python workstation_helper.py --show-window
+; (your Kroll screens may be titled e.g. "2-Start Screen", not "Kroll")
+WINDOW_KROLL =
 STEP_DELAY_SEC = 0.4
 
 [RxSchema]

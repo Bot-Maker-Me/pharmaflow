@@ -104,6 +104,9 @@ export interface Script {
   verifiedAt?: string;
   pushedAt?: string;
   pushedTo?: PmsId;
+  /** Set when this script came from a fax the agent read in Kroll's Inbound Docs (dbo.Mail id). */
+  faxMailId?: number;
+  faxStoreId?: string;
   /** Original AI / intake values; used to learn when the tech corrects fields. */
   extractionSnapshot?: ExtractionSnapshot;
 }

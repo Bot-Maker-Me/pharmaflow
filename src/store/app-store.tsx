@@ -60,6 +60,10 @@ export interface ManualScriptInput {
   confidence?: number;
   /** Skip the "loaded" toast (bulk loading). */
   quiet?: boolean;
+  /** Kroll dbo.Mail id of the inbound fax this script was read from. */
+  fax_mail_id?: number;
+  /** Extra "please check" lines shown on the review screen. */
+  extra_flags?: string[];
 }
 
 interface AppStoreValue {
@@ -458,6 +462,33 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         onStep,
         settingsRef.current.helperToken,
       );
+      if (result.ok && result.mode === "helper" && script.faxMailId) {
+        // Really typed into Kroll (not simulated): tell the cloud, so the fax leaves the to-do list and the agent can
+        // later compare what was pushed with what Kroll finally holds, and learn from staff changes to the sig.
+        const med = script.medications[0];
+        const base = settingsRef.current.apiBaseUrl.replace(/\/$/, "");
+        void fetch(`${base}/api/queue`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", "x-access-token": settingsRef.current.apiToken },
+          body: JSON.stringify({
+            kind: "fax",
+            action: "pushed",
+            store_id: script.faxStoreId || "default",
+            mail_id: script.faxMailId,
+            pushed: {
+              patient: script.patient.full_name,
+              dob: script.patient.dob,
+              prescriber: script.prescriber.name,
+              license: script.prescriber.license_number,
+              drug: med?.drug_name,
+              din: med?.din,
+              qty: med?.quantity,
+              refills: med?.refills,
+              sig: med?.sig,
+            },
+          }),
+        }).catch(() => undefined);
+      }
       if (result.ok) {
         setScripts((prev) =>
           prev.map((c) =>
@@ -553,11 +584,12 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
           source === "kroll_sql"
             ? ["From Kroll SQL agent", input.page_image_url ? "ScriptImage OCR attached" : "No ScriptImage on row"]
             : source === "fax"
-              ? ["Read from Kroll Inbound Docs by the agent (OCR)", "Check every field against the fax image"]
+              ? ["Read from Kroll Inbound Docs by the agent (OCR)", "Check every field against the fax image", ...(input.extra_flags ?? [])]
               : ["Manually keyed"],
         notes: source === "kroll_sql" ? `pending_rx_id=${input.pending_rx_id ?? ""}` : "",
         status: "pending",
         dinVerifiedCount: enriched.din_status === "verified" ? 1 : 0,
+        ...(input.fax_mail_id ? { faxMailId: input.fax_mail_id, faxStoreId: input.store_id } : {}),
       };
       script.extractionSnapshot = snapshotFromScript(script);
       setDocuments((prev) => [document, ...prev]);

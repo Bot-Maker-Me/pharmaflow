@@ -33,58 +33,6 @@ export function QuickActions({ className }: { className?: string }) {
 
   return (
     <div className={cn("flex items-center gap-2", className)}>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="gap-2">
-            <Inbox className="h-4 w-4" />
-            <span className="hidden md:inline">Recent faxes</span>
-            {recent.length ? (
-              <Badge variant="secondary" className="ml-0.5 px-1.5 py-0 text-[10px]">
-                {documents.length}
-              </Badge>
-            ) : null}
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-[320px]">
-          <DropdownMenuLabel>Recently received</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          {recent.length === 0 ? (
-            <p className="px-2 py-3 text-xs text-muted-foreground">
-              No faxes ingested yet. Drop a PDF on the intake page.
-            </p>
-          ) : (
-            recent.map((document) => {
-              const docScripts = scripts.filter((script) => script.documentId === document.id);
-              const pending = docScripts.filter((script) => script.status === "pending").length;
-              const coverPages = document.pages.filter((page) => page.is_cover_page).length;
-              return (
-                <DropdownMenuItem
-                  key={document.id}
-                  onSelect={() => openDocument(document.id)}
-                  className="items-start gap-3 py-2"
-                >
-                  <History className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-medium text-foreground">
-                      {document.name}
-                    </span>
-                    <span className="block text-[11px] text-muted-foreground">
-                      {document.pageCount} page(s)
-                      {coverPages ? ` · ${coverPages} cover` : ""} · {docScripts.length} Rx
-                      {pending ? ` · ${pending} pending` : ""}
-                    </span>
-                  </span>
-                </DropdownMenuItem>
-              );
-            })
-          )}
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => navigate("/app/queue")} className="gap-2">
-            <Inbox className="h-4 w-4" />
-            Open the prescription queue
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
 
       <PmsSelector />
 

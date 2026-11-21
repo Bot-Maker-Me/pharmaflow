@@ -416,7 +416,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--no-tray", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--show-window", action="store_true",
+                        help="wait 5 s, print the title of the window you click into (use it to set WINDOW_KROLL), exit")
     args = parser.parse_args(argv)
+    if args.show_window:
+        print("Click into the Kroll window now (5 seconds)...")
+        time.sleep(5)
+        print(f"Window title: {foreground_window_title()!r}")
+        return 0
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     load_config()

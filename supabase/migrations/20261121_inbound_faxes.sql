@@ -21,3 +21,12 @@ ALTER TABLE public.inbound_faxes ENABLE ROW LEVEL SECURITY;
 -- The cloud functions use the service role; tables made through migrations need explicit grants.
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.inbound_faxes TO service_role;
 GRANT USAGE, SELECT ON SEQUENCE public.inbound_faxes_id_seq TO service_role;
+
+-- Workflow: a fax is 'new' until staff push it to Kroll ('pushed') or dismiss it ('dismissed').
+-- After a push the agent compares what was pushed with what Kroll finally holds and learns from the difference.
+ALTER TABLE public.inbound_faxes ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'new';
+ALTER TABLE public.inbound_faxes ADD COLUMN IF NOT EXISTS pushed_at TIMESTAMPTZ;
+ALTER TABLE public.inbound_faxes ADD COLUMN IF NOT EXISTS pushed JSONB;
+ALTER TABLE public.inbound_faxes ADD COLUMN IF NOT EXISTS learned_at TIMESTAMPTZ;
+ALTER TABLE public.inbound_faxes ADD COLUMN IF NOT EXISTS learn_result JSONB;
+CREATE INDEX IF NOT EXISTS idx_inbound_faxes_status ON public.inbound_faxes (store_id, status, created_at DESC);

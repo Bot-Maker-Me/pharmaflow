@@ -70,8 +70,10 @@ export default async function handler(req, res) {
       const q = new URL(req.url, "http://x").searchParams;
       if (q.get("kind") === "faxes") {
         // Prescriptions the agent read from Kroll's Inbound Docs (OCR), newest first, with a signed link to the fax image.
+        // ?status=new (default) | pushed | dismissed
+        const fstatus = ["new", "pushed", "dismissed"].includes(q.get("status")) ? q.get("status") : "new";
         const fr = await fetch(
-          `${url.replace(/\/$/, "")}/rest/v1/inbound_faxes?select=mail_id,received_label,from_label,doc_type,summary,ocr,page_image_url,created_at&is_prescription=eq.true&order=created_at.desc&limit=40`,
+          `${url.replace(/\/$/, "")}/rest/v1/inbound_faxes?select=mail_id,store_id,received_label,from_label,doc_type,summary,ocr,page_image_url,status,pushed_at,learn_result,created_at&is_prescription=eq.true&status=eq.${fstatus}&order=created_at.desc&limit=60`,
           { headers },
         );
         if (!fr.ok) return send(res, 500, { error: "Query failed" });
@@ -111,6 +113,28 @@ export default async function handler(req, res) {
         } catch {
           return send(res, 400, { error: "Invalid JSON" });
         }
+      }
+      if (body?.kind === "fax") {
+        // { kind:"fax", store_id, mail_id, action:"pushed"|"dismiss"|"reopen", pushed:{...what was typed into Kroll} }
+        const mailId = Number(body.mail_id);
+        if (!Number.isSafeInteger(mailId) || mailId <= 0) return send(res, 400, { error: "mail_id is required" });
+        const patch =
+          body.action === "pushed"
+            ? { status: "pushed", pushed_at: new Date().toISOString(), pushed: body.pushed && typeof body.pushed === "object" ? body.pushed : null, learned_at: null }
+            : body.action === "dismiss"
+              ? { status: "dismissed" }
+              : body.action === "reopen"
+                ? { status: "new", pushed_at: null, pushed: null, learned_at: null }
+                : null;
+        if (!patch) return send(res, 400, { error: "Unknown action" });
+        const store = String(body.store_id || "default").slice(0, 64);
+        const fr = await fetch(
+          `${url.replace(/\/$/, "")}/rest/v1/inbound_faxes?store_id=eq.${encodeURIComponent(store)}&mail_id=eq.${mailId}`,
+          { method: "PATCH", headers: { ...headers, Prefer: "return=representation" }, body: JSON.stringify(patch) },
+        );
+        if (!fr.ok) return send(res, 500, { error: "Update failed" });
+        const rows = await fr.json();
+        return rows.length ? send(res, 200, { ok: true, mail_id: mailId, status: rows[0].status }) : send(res, 404, { error: "Not found" });
       }
       const id = Number(body?.id);
       if (!Number.isSafeInteger(id) || id <= 0) return send(res, 400, { error: "id is required" });

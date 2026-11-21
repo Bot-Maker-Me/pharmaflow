@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Activity, Home, Inbox, ListChecks, Settings2, ShieldCheck } from "lucide-react";
+import { Home, Settings2 } from "lucide-react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { HelperStatus } from "@/components/HelperStatus";
@@ -10,10 +10,6 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { to: "/app", label: "Intake", icon: Home, end: true },
-  { to: "/app/live", label: "Live", icon: Activity, end: false },
-  { to: "/app/inbox", label: "Kroll inbox", icon: Inbox, end: false },
-  { to: "/app/verify", label: "Verification", icon: ShieldCheck, end: false },
-  { to: "/app/queue", label: "Queue", icon: ListChecks, end: false },
   { to: "/app/settings", label: "Settings", icon: Settings2, end: false },
 ];
 
@@ -28,7 +24,7 @@ function titleFor(pathname: string): { title: string; subtitle: string } {
     return { title: "Queue", subtitle: "Scripts in the intake pipeline" };
   if (pathname.includes("/settings"))
     return { title: "Settings", subtitle: "Agent, extraction, and store isolation" };
-  return { title: "Intake", subtitle: "Fax and prescription capture" };
+  return { title: "Intake", subtitle: "Faxes arrive here by themselves" };
 }
 
 function AgentPanel() {
@@ -79,7 +75,6 @@ function AgentPanel() {
 }
 
 export function AppShell() {
-  const { stats } = useAppStore();
   const location = useLocation();
   const { title, subtitle } = titleFor(location.pathname);
 
@@ -116,11 +111,6 @@ export function AppShell() {
             >
               <item.icon className="h-[18px] w-[18px] shrink-0" />
               <span className="hidden truncate lg:inline">{item.label}</span>
-              {item.to === "/app/queue" && stats.pending > 0 ? (
-                <span className="ml-auto hidden bg-pf-amber px-1.5 py-0.5 font-data text-[11px] font-medium text-pf-ink lg:inline">
-                  {stats.pending}
-                </span>
-              ) : null}
             </NavLink>
           ))}
         </nav>

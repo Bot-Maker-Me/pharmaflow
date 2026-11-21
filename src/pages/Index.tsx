@@ -1,245 +1,236 @@
-import {
-  Activity,
-  BadgeCheck,
-  Clock3,
-  FileStack,
-  Gauge,
-  Radio,
-  Send,
-  ShieldAlert,
-  Sparkles,
-} from "lucide-react";
+import * as React from "react";
+import { AlertTriangle, CheckCircle2, Loader2, Printer, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 
-import { ConfidenceChart } from "@/components/ConfidenceChart";
-import { ConfidenceLegend } from "@/components/Confidence";
-import { HelperStatus } from "@/components/HelperStatus";
-import { ManualEntryDialog } from "@/components/ManualEntryDialog";
-import { QueueTable } from "@/components/QueueTable";
-import { StatCard } from "@/components/StatCard";
-import { UploadDropzone } from "@/components/UploadDropzone";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
-import { getPmsProfile } from "@/lib/pms";
 import { useAppStore } from "@/store/app-store";
-import { cn } from "@/lib/utils";
 
-export default function Index() {
-  const {
-    documents,
-    scripts,
-    stats,
-    pipeline,
-    activity,
-    settings,
-    helperStatus,
-    helperInfo,
-    ingestFiles,
-    loadSampleFax,
-  } = useAppStore();
+interface FaxMed {
+  drug_name?: string;
+  strength?: string;
+  quantity?: number;
+  refills?: number;
+  sig?: string;
+  din?: string;
+  is_compound?: boolean;
+  sig_hint?: { to: string; hits: number };
+  sig_learned?: { to: string; hits: number };
+}
+
+interface FaxRow {
+  mail_id: number;
+  store_id: string;
+  received_label: string | null;
+  from_label: string | null;
+  page_image_url: string | null;
+  status: "new" | "pushed" | "dismissed";
+  pushed_at: string | null;
+  learn_result: { found?: boolean; learned?: boolean } | null;
+  ocr: {
+    scripts?: Array<{
+      patient?: { full_name?: string; dob?: string; health_card_num?: string };
+      prescriber?: { name?: string; license_number?: string };
+      medications?: FaxMed[];
+      overall_confidence?: number;
+    }>;
+  } | null;
+}
+
+type Tab = "new" | "pushed";
+const POLL_MS = 10000;
+
+export default function Intake() {
+  const { settings, scripts, createManualScript, helperStatus } = useAppStore();
   const navigate = useNavigate();
-  const pending = scripts.filter((script) => script.status === "pending").slice(0, 6);
-  const profile = getPmsProfile(settings.pms);
+  const [tab, setTab] = React.useState<Tab>("new");
+  const [rows, setRows] = React.useState<FaxRow[]>([]);
+  const [newCount, setNewCount] = React.useState<number | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState<number | null>(null);
+
+  const base = settings.apiBaseUrl.replace(/\/$/, "");
+  const headers = React.useMemo(
+    () => ({ "Content-Type": "application/json", "x-access-token": settings.apiToken }),
+    [settings.apiToken],
+  );
+
+  const load = React.useCallback(async () => {
+    if (!settings.apiToken) {
+      setError("Open Settings and enter the access token.");
+      return;
+    }
+    try {
+      const [shown, fresh] = await Promise.all([
+        fetch(`${base}/api/queue?kind=faxes&status=${tab}`, { headers }),
+        tab === "new" ? Promise.resolve(null) : fetch(`${base}/api/queue?kind=faxes&status=new`, { headers }),
+      ]);
+      if (shown.status === 401) throw new Error("Wrong access token (Settings)");
+      if (!shown.ok) throw new Error(`Server returned ${shown.status}`);
+      const data = (await shown.json()) as { rows: FaxRow[] };
+      setRows(data.rows);
+      if (tab === "new") setNewCount(data.rows.length);
+      else if (fresh?.ok) setNewCount(((await fresh.json()) as { rows: FaxRow[] }).rows.length);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [base, headers, settings.apiToken, tab]);
+
+  React.useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void load();
+    }, POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
+  /** Make sure the fax exists as a script (the review screen works on scripts) and return its id. */
+  const scriptFor = React.useCallback(
+    (fax: FaxRow, quiet: boolean): string => {
+      const existing = scripts.find((s) => s.faxMailId === fax.mail_id);
+      if (existing) return existing.id;
+      const s = fax.ocr?.scripts?.[0];
+      const m = s?.medications?.[0];
+      return createManualScript({
+        full_name: s?.patient?.full_name || "UNKNOWN PATIENT",
+        dob: s?.patient?.dob || "",
+        health_card_num: s?.patient?.health_card_num || "",
+        prescriber_name: s?.prescriber?.name || "",
+        license_number: s?.prescriber?.license_number || "",
+        drug_name: m?.drug_name || "",
+        din: m?.din || "",
+        strength: m?.strength || "",
+        quantity: Number(m?.quantity) || 0,
+        refills: Number(m?.refills) || 0,
+        sig: m?.sig || "",
+        is_compound: Boolean(m?.is_compound),
+        source: "fax",
+        page_image_url: fax.page_image_url || undefined,
+        confidence: s?.overall_confidence,
+        store_id: fax.store_id,
+        fax_mail_id: fax.mail_id,
+        extra_flags: [
+          ...(m?.sig_hint ? [`Staff usually change this sig to "${m.sig_hint.to}" (${m.sig_hint.hits}x) - check the dose and timing`] : []),
+          ...(m?.sig_learned ? [`Sig was adjusted to match how staff usually write it - please confirm`] : []),
+        ],
+        quiet,
+      });
+    },
+    [createManualScript, scripts],
+  );
+
+  // New faxes become reviewable scripts by themselves, so "Next" in the review screen walks through the whole list.
+  React.useEffect(() => {
+    if (tab !== "new") return;
+    rows.forEach((fax) => {
+      if (!scripts.some((s) => s.faxMailId === fax.mail_id)) scriptFor(fax, true);
+    });
+  }, [rows, scripts, scriptFor, tab]);
+
+  async function dismiss(fax: FaxRow) {
+    if (!window.confirm("Remove this fax from the list? Use this when it is not a prescription.")) return;
+    setBusy(fax.mail_id);
+    try {
+      const res = await fetch(`${base}/api/queue`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ kind: "fax", action: "dismiss", store_id: fax.store_id, mail_id: fax.mail_id }),
+      });
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      setRows((prev) => prev.filter((r) => r.mail_id !== fax.mail_id));
+      void load();
+    } catch (e) {
+      toast.error(`Could not remove it: ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-5 p-4 lg:p-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          icon={FileStack}
-          label="In intake queue"
-          value={stats.pending}
-          hint={`${documents.length} document(s) ingested`}
-          tone="info"
-        />
-        <StatCard
-          icon={BadgeCheck}
-          label="Verified"
-          value={stats.verified}
-          hint="Ready for keystroke push"
-          tone="success"
-        />
-        <StatCard
-          icon={Send}
-          label="Pushed to PMS"
-          value={stats.pushed}
-          hint={profile.name}
-        />
-        <StatCard
-          icon={ShieldAlert}
-          label="Needs a look"
-          value={stats.flagged}
-          hint="DIN, compound or licence checks"
-          tone="warning"
-        />
+    <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-4 p-4 lg:p-6">
+      {helperStatus !== "connected" && (
+        <div className="flex items-start gap-3 border-2 border-pf-amber bg-pf-amber/10 p-3 text-sm">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            The keystroke helper is not running on this PC, so <b>Push to Kroll</b> cannot type into Kroll here. Start
+            <span className="font-data"> workstation_helper.py</span> on this PC first.
+          </p>
+        </div>
+      )}
+      {error && <p className="border-2 border-destructive p-3 text-sm text-destructive">{error}</p>}
+
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex gap-2">
+          <Button size="sm" variant={tab === "new" ? "default" : "outline"} onClick={() => setTab("new")}>
+            To do{newCount != null ? ` (${newCount})` : ""}
+          </Button>
+          <Button size="sm" variant={tab === "pushed" ? "default" : "outline"} onClick={() => setTab("pushed")}>
+            Pushed to Kroll
+          </Button>
+        </div>
+        {tab === "new" && rows.length > 0 && (
+          <Button size="sm" onClick={() => navigate(`/app/verify/${scriptFor(rows[0], true)}`)}>
+            Start with the first fax
+          </Button>
+        )}
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-3">
-        <div className="space-y-5 xl:col-span-2">
-          <UploadDropzone onFiles={ingestFiles} onLoadSample={loadSampleFax} busy={pipeline.active} />
-
-          <Card>
-            <CardHeader className="flex-row items-start justify-between gap-4 pb-3">
-              <div>
-                <CardTitle className="text-sm">Processing pipeline</CardTitle>
-                <CardDescription>
-                  {pipeline.active ? pipeline.stage : "Idle — watching the intake queue"}
-                </CardDescription>
-              </div>
-              <Badge variant={pipeline.active ? "info" : "secondary"}>
-                {pipeline.active ? `${pipeline.progress}%` : "Idle"}
-              </Badge>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <Progress value={pipeline.progress} />
-              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {[
-                  { label: "Ingest", icon: FileStack },
-                  { label: "Vision AI", icon: Sparkles },
-                  { label: "DIN lookup", icon: BadgeCheck },
-                  { label: "Queue", icon: Clock3 },
-                ].map((stage, index) => {
-                  const threshold = (index + 1) * 25;
-                  const done = pipeline.progress >= threshold;
-                  const current = pipeline.active && pipeline.progress < threshold && pipeline.progress >= threshold - 25;
-                  return (
-                    <div
-                      key={stage.label}
-                      className={cn(
-                        "flex items-center gap-2 rounded-lg border px-3 py-2 text-xs",
-                        done
-                          ? "border-[#1F7A4D] bg-[#1F7A4D]/10 text-[#1F7A4D]"
-                          : current
-                            ? "border-pf-rule bg-pf-paper text-pf-slate"
-                            : "border-border bg-secondary/50 text-muted-foreground",
-                      )}
-                    >
-                      <stage.icon className="h-3.5 w-3.5" />
-                      {stage.label}
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex-row items-center justify-between gap-4 pb-3">
-              <div>
-                <CardTitle className="text-sm">Awaiting verification</CardTitle>
-                <CardDescription>Newest extractions first</CardDescription>
+      <ul className="divide-y-2 divide-pf-rule border-2 border-pf-ink bg-card dark:border-border">
+        {rows.map((fax) => {
+          const s = fax.ocr?.scripts?.[0];
+          const m = s?.medications?.[0];
+          const conf = s?.overall_confidence != null ? Math.round(s.overall_confidence * 100) : null;
+          const weak = conf != null && conf < 85;
+          return (
+            <li key={fax.mail_id} className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <div className="min-w-0 flex-1">
+                <p className="text-[15px] font-bold">
+                  {s?.patient?.full_name || "Patient not readable"}
+                  {s?.patient?.dob ? <span className="ml-2 font-data text-xs font-normal text-muted-foreground">{s.patient.dob}</span> : null}
+                </p>
+                <p className="mt-0.5 text-sm">
+                  {[m?.drug_name, m?.strength].filter(Boolean).join(" ") || "Drug not readable"}
+                  <span className="text-muted-foreground"> · qty {m?.quantity ?? "?"} · refills {m?.refills ?? "?"}</span>
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {m?.sig || "no sig"} · Dr {s?.prescriber?.name || "?"}
+                </p>
+                <p className="mt-1 font-data text-[11px] text-muted-foreground">
+                  {fax.received_label ?? ""} · {fax.from_label ?? "unknown sender"}
+                </p>
               </div>
               <div className="flex items-center gap-2">
-                <ManualEntryDialog />
-                <Button variant="outline" onClick={() => navigate("/app/queue")}>
-                  Open queue
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <QueueTable scripts={pending} onOpen={(id) => navigate(`/app/verify/${id}`)} compact />
-            </CardContent>
-          </Card>
-
-          <ConfidenceChart />
-        </div>
-
-        <div className="space-y-5">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Radio className="h-4 w-4 text-primary" />
-                Desktop helper
-              </CardTitle>
-              <CardDescription>Keystroke automation bridge</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3 pt-0">
-              <HelperStatus />
-              <div className="rounded-lg border border-border bg-secondary/50 p-3 text-xs">
-                <p className="flex items-center justify-between gap-2">
-                  <span className="text-muted-foreground">Endpoint</span>
-                  <span className="font-mono text-foreground">{settings.helperUrl}</span>
-                </p>
-                <Separator className="my-2" />
-                <p className="flex items-center justify-between gap-2">
-                  <span className="text-muted-foreground">target_system</span>
-                  <span className="font-mono text-foreground">{profile.targetSystem}</span>
-                </p>
-                <Separator className="my-2" />
-                <p className="flex items-center justify-between gap-2">
-                  <span className="text-muted-foreground">Hotkey</span>
-                  <span className="font-mono text-foreground">{profile.shortcut}</span>
-                </p>
-                {helperInfo.version ? (
+                {conf != null && (
+                  <Badge variant={weak ? "warning" : "outline"} title="How sure the reading is">
+                    {conf}%
+                  </Badge>
+                )}
+                {tab === "new" ? (
                   <>
-                    <Separator className="my-2" />
-                    <p className="flex items-center justify-between gap-2">
-                      <span className="text-muted-foreground">Helper build</span>
-                      <span className="font-mono text-foreground">v{helperInfo.version}</span>
-                    </p>
+                    <Button size="sm" variant="outline" disabled={busy === fax.mail_id} onClick={() => void dismiss(fax)} title="Not a prescription">
+                      {busy === fax.mail_id ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                    </Button>
+                    <Button size="sm" onClick={() => navigate(`/app/verify/${scriptFor(fax, false)}`)}>
+                      <Printer className="h-4 w-4" /> Review &amp; push
+                    </Button>
                   </>
-                ) : null}
+                ) : (
+                  <span className="flex items-center gap-1 text-xs font-medium text-[#1F7A4D] dark:text-emerald-400">
+                    <CheckCircle2 className="h-4 w-4" /> Pushed {fax.pushed_at ? new Date(fax.pushed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}
+                  </span>
+                )}
               </div>
-              <p className="text-[11px] text-muted-foreground">
-                {helperStatus === "connected"
-                  ? "The helper is listening — pushes POST to /autofill and are typed straight into the PMS window."
-                  : "Run helper/kroll_tray_helper.py (or the packaged .exe) on the workstation to enable keystroke injection. Until then, pushes run in simulation mode."}
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Gauge className="h-4 w-4 text-primary" />
-                Confidence thresholds
-              </CardTitle>
-              <CardDescription>Colour coding used across the queue</CardDescription>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <ConfidenceLegend />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Activity className="h-4 w-4 text-primary" />
-                Recent activity
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <ol className="space-y-2.5">
-                {activity.slice(0, 6).map((entry) => (
-                  <li key={entry.id} className="flex items-start gap-2.5">
-                    <span
-                      className={cn(
-                        "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full",
-                        entry.tone === "ok"
-                          ? "bg-[#1F7A4D]"
-                          : entry.tone === "warn"
-                            ? "bg-pf-amber"
-                            : "bg-slate-400",
-                      )}
-                    />
-                    <div className="min-w-0">
-                      <p className="text-xs text-foreground">{entry.text}</p>
-                      <p className="text-[11px] text-muted-foreground">
-                        {new Date(entry.at).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </p>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+            </li>
+          );
+        })}
+        {rows.length === 0 && (
+          <li className="p-10 text-center text-sm text-muted-foreground">
+            {tab === "new" ? "No new prescription faxes. They appear here by themselves." : "Nothing pushed yet."}
+          </li>
+        )}
+      </ul>
     </div>
   );
 }

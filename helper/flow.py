@@ -82,6 +82,8 @@ RECHECK_EVERY_SEC = 60            # how often rows still being filled in by staf
 INBOUND_FAX_EVERY_SEC = 60        # how often Kroll's Inbound Docs (faxes) are checked
 INBOUND_FAX_PER_CYCLE = 5         # at most this many faxes are read per check (keeps OCR cost / time bounded)
 INBOUND_FAX_MAX_TRIES = 3
+FAX_LEARN_EVERY_SEC = 120         # how often faxes pushed to Kroll are compared with the Rx staff finished
+FAX_LEARN_GIVE_UP_HOURS = 24      # a pushed fax with no matching Rx after this long is closed without learning
 COMPARE_EVERY_SEC = 600          # how often SHADOW looks for staff entries
 COMPARE_GIVE_UP_DAYS = 3         # an AUTO decision never entered by staff after this long is reported as such
 SPOOL_MAX_ATTEMPTS = 20          # then the item is parked as dead-letter
@@ -1675,6 +1677,26 @@ class CloudClient:
             return False, str(body.get("ocr_error") or "cloud could not read the fax"), body
         return True, "", body
 
+    def get_pushed_faxes(self) -> List[Dict[str, Any]]:
+        """Faxes staff pushed to Kroll that have not been compared with Kroll's final Rx yet."""
+        try:
+            resp = self.session.get(self._sibling("agent-fax"), params={"pending_learn": 1, "store_id": self.cfg.store_id},
+                                    timeout=CLOUD_TIMEOUT_SEC)
+            if resp.status_code != 200:
+                self.log.warning("Could not list pushed faxes: HTTP %s", resp.status_code)
+                return []
+            return list(resp.json().get("items") or [])
+        except (requests.RequestException, ValueError) as exc:
+            self.log.warning("Could not list pushed faxes: %s", exc)
+            return []
+
+    def push_fax_result(self, payload: Dict[str, Any]) -> bool:
+        try:
+            resp = self.session.post(self._sibling("agent-fax"), json=payload, timeout=CLOUD_TIMEOUT_SEC)
+            return 200 <= resp.status_code < 300
+        except requests.RequestException:
+            return False
+
     def push_learn(self, payload: Dict[str, Any]) -> bool:
         try:
             resp = self.session.post(self._sibling("learn"), json=payload, timeout=CLOUD_TIMEOUT_SEC)
@@ -2081,6 +2103,7 @@ class PharmFlowAgent:
         self._last_compare = -COMPARE_EVERY_SEC
         self._last_recheck = -RECHECK_EVERY_SEC
         self._last_inbound = -INBOUND_FAX_EVERY_SEC
+        self._last_fax_learn = -FAX_LEARN_EVERY_SEC
         self._running = True
         self.log.info(
             "Config loaded | mode=%s | poll=%ss | db_user=%s | api=%s",
@@ -2232,6 +2255,41 @@ class PharmFlowAgent:
                 self.log.warning("Inbound fax Mail=%s read failed (%s) - try %d of %d", mid, err, tries, INBOUND_FAX_MAX_TRIES)
                 if tries >= INBOUND_FAX_MAX_TRIES:
                     self.store.fax_mark_done(mid)
+
+    def _learn_from_pushed_faxes(self) -> None:
+        """After staff push a fax to Kroll they may still change the sig there. Find the finished Rx, compare, and let
+        the cloud store the correction (a wording fix is applied to the next fax automatically, a dose / frequency
+        change only becomes a hint). Read-only on Kroll. Never raises."""
+        r = self.cfg.rx_schema
+        if not (self.cfg.cloud_enabled and r.get("rx_table")):
+            return
+        if time.monotonic() - self._last_fax_learn < FAX_LEARN_EVERY_SEC:
+            return
+        self._last_fax_learn = time.monotonic()
+        try:
+            items = self.cloud.get_pushed_faxes()
+            now = dt.datetime.now(dt.timezone.utc)
+            for item in items:
+                pushed = item.get("pushed") or {}
+                raw_at = str(item.get("pushed_at") or "")
+                try:
+                    at = dt.datetime.fromisoformat(raw_at.replace("Z", "+00:00"))
+                except ValueError:
+                    at = now
+                # Kroll stores local server time: compare from the start of the day the fax was pushed
+                since = at.astimezone().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+                found = find_finished_rx(self.db.ensure(), r, pushed, since)
+                if found is None and now - at < dt.timedelta(hours=FAX_LEARN_GIVE_UP_HOURS):
+                    continue                                       # staff have not finished it in Kroll yet
+                payload = {"type": "fax_result", "store_id": self.cfg.store_id, "mail_id": item.get("mail_id"),
+                           "found": found is not None,
+                           "final": ({"sig": found.get("rx_sig"), "qty": found.get("rx_qty"), "refills": found.get("rx_refills")}
+                                     if found else None)}
+                if self.cloud.push_fax_result(payload):
+                    self.log.info("Pushed fax Mail=%s %s", item.get("mail_id"),
+                                  "compared with Kroll's final Rx" if found else "closed (no matching Rx found)")
+        except Exception as exc:
+            self.log.warning("Learning from pushed faxes skipped: %s", exc)
 
     def _hint_din_from_kroll(self, pending_id: int) -> None:
         """Fax had no DIN? Look the drug up in Kroll's own drug table and tell the cloud what we found."""
@@ -2433,6 +2491,7 @@ class PharmFlowAgent:
                 self.store.set_watermark(max(top, watermark))
             self._recheck_incomplete()
             self._poll_inbound_faxes()
+            self._learn_from_pushed_faxes()
             self._flush_spool()
             self._compare_with_staff()
             self._learn_background()
@@ -2567,6 +2626,47 @@ def shadow_report(cfg: AgentConfig, out_path: Path) -> int:
     print(text)
     print(f"Saved to {out_path} (no patient names)")
     return 0 if verdict_ok else 3
+
+
+def split_patient_name(full: str) -> Tuple[str, str]:
+    """'Last, First' or 'First Middle Last' -> (first, last). Empty strings when it cannot be split."""
+    text = " ".join(str(full or "").replace(".", " ").split())
+    if not text:
+        return "", ""
+    if "," in text:
+        last, _, first = text.partition(",")
+        return first.strip().split(" ")[0] if first.strip() else "", last.strip()
+    parts = text.split(" ")
+    return (parts[0], parts[-1]) if len(parts) > 1 else ("", parts[0])
+
+
+def find_finished_rx(conn, rx: Dict[str, str], pushed: Dict[str, Any], since: dt.datetime) -> Optional[Dict[str, Any]]:
+    """Find the Rx staff finished in Kroll for a fax that was pushed (read-only SELECTs).
+    Patient = name + date of birth in dbo.Pat; Rx = that patient + the pushed DIN, filled on/after `since`.
+    Returns None when nothing matches yet, else {rx_sig, rx_qty, rx_refills}."""
+    first, last = split_patient_name(pushed.get("patient"))
+    dob = str(pushed.get("dob") or "")[:10]
+    din = "".join(ch for ch in str(pushed.get("din") or "") if ch.isdigit())
+    if not (last and dob and din and rx.get("rx_table") and rx.get("rx_pat_id") and rx.get("rx_sig") and rx.get("rx_created")):
+        return None
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT TOP 5 ID FROM dbo.Pat WITH (NOLOCK) WHERE LastName = ? AND FirstName LIKE ? "
+                    "AND CAST(Birthday AS date) = ?", (last, (first or "") + "%", dob))
+        pat_ids = [r[0] for r in cur.fetchall()]
+        if not pat_ids:
+            return None
+        cols = [f"{rx[k]} AS {k}" for k in ("rx_sig", "rx_qty", "rx_refills") if rx.get(k)]
+        marks = ",".join("?" for _ in pat_ids)
+        cur.execute(f"SELECT TOP 1 {', '.join(cols)} FROM {rx['rx_table']} WITH (NOLOCK) "
+                    f"WHERE {rx['rx_pat_id']} IN ({marks}) AND LTRIM(RTRIM(DIN)) = ? AND {rx['rx_created']} >= ? "
+                    f"ORDER BY {rx['rx_created']} DESC", (*pat_ids, din.zfill(8), since))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {c[0]: jsonable(v) for c, v in zip(cur.description, row)}
+    finally:
+        cur.close()
 
 
 def fetch_inbound_faxes(conn, after_mail_id: int = 0, limit: int = 50,
