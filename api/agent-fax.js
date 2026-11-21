@@ -17,7 +17,7 @@ function send(res, status, body) {
 }
 
 const FAX_PROMPT = `You read one fax received by a Canadian pharmacy. Return JSON only (no markdown):
-{"doc_type":"prescription|refill_request|transfer|other","is_prescription":false,"summary":"max 12 words on what this fax is","scripts":[{"patient":{"full_name":"","dob":"YYYY-MM-DD","health_card_num":"","confidence":0.0},"prescriber":{"name":"","license_number":"","confidence":0.0},"medications":[{"drug_name":"","din":"","strength":"","quantity":0,"refills":0,"sig":"","is_compound":false,"confidence":0.0}],"overall_confidence":0.0}]}
+{"doc_type":"prescription|refill_request|transfer|other","is_prescription":false,"summary":"max 12 words on what kind of fax this is, never any person names","scripts":[{"patient":{"full_name":"","dob":"YYYY-MM-DD","health_card_num":"","confidence":0.0},"prescriber":{"name":"","license_number":"","confidence":0.0},"medications":[{"drug_name":"","din":"","strength":"","quantity":0,"refills":0,"sig":"","is_compound":false,"confidence":0.0}],"overall_confidence":0.0}]}
 is_prescription is true only for a new prescription or a refill/renewal authorization for a patient. Advertisements, flyers, reports, cover sheets, lab results and anything without a prescription are doc_type "other" with scripts []. DIN is 8 digits. Empty strings when unreadable.`;
 
 async function readFax(dataUrl) {
@@ -82,7 +82,8 @@ export default async function handler(req, res) {
     from_label: body.from ? String(body.from).slice(0, 80) : null,
     doc_type: ["prescription", "refill_request", "transfer", "other"].includes(result.doc_type) ? result.doc_type : "other",
     is_prescription: isRx,
-    summary: result.summary ? String(result.summary).slice(0, 160) : null,
+    // The Live page shows no patient names: drop summaries that mention a patient/person title.
+    summary: result.summary && !/\b(patient|mr|mrs|ms|miss|dr)\b\.?/i.test(String(result.summary)) ? String(result.summary).slice(0, 160) : null,
     ocr: isRx ? { scripts } : null,
     page_image_url: imageUrl,
   };
