@@ -1,0 +1,5 @@
+#!/bin/sh
+# Keep the auto-generated section of CLAUDE.md current in every commit.
+(python3 scripts/update-claude-md.py || python scripts/update-claude-md.py) >/dev/null 2>&1
+git add CLAUDE.md 2>/dev/null
+exit 0

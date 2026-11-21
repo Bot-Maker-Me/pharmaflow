@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "command -v graphify >/dev/null 2>&1 || pip install -q --break-system-packages graphifyy >/dev/null 2>&1 || pip install -q graphifyy >/dev/null 2>&1; command -v graphify >/dev/null 2>&1 && graphify update . >/dev/null 2>&1; exit 0",
+            "command": "command -v graphify >/dev/null 2>&1 || pip install -q --break-system-packages graphifyy >/dev/null 2>&1 || pip install -q graphifyy >/dev/null 2>&1; command -v graphify >/dev/null 2>&1 && graphify update . >/dev/null 2>&1; git config core.hooksPath .githooks >/dev/null 2>&1; (python3 scripts/update-claude-md.py || python scripts/update-claude-md.py) >/dev/null 2>&1; exit 0",
             "timeout": 180
           }
         ]
