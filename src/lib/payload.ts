@@ -20,12 +20,31 @@ export interface HelperPayload {
   };
 }
 
+/**
+ * What staff would type into the PMS patient search. Health card when the fax has one,
+ * otherwise "Last, First" from the printed name (faxes often have no health card).
+ */
+export function patientLookup(patient: Script["patient"]): string {
+  const card = (patient.health_card_num ?? "").trim();
+  if (card) return card;
+  const name = (patient.full_name ?? "").replace(/\s+/g, " ").trim();
+  if (!name) return "";
+  if (name.includes(",")) {
+    const [last, ...rest] = name.split(",");
+    return `${last.trim()}, ${rest.join(" ").trim()}`.replace(/,\s*$/, "");
+  }
+  const parts = name.split(" ");
+  if (parts.length === 1) return parts[0];
+  const last = parts[parts.length - 1];
+  return `${last}, ${parts.slice(0, -1).join(" ")}`;
+}
+
 export function buildHelperPayload(script: Script, medIndex: number, pmsId: PmsId): HelperPayload {
   const medication = script.medications[medIndex];
   return {
     target_system: getPmsProfile(pmsId).targetSystem,
     data: {
-      patient_lookup: script.patient.health_card_num,
+      patient_lookup: patientLookup(script.patient),
       prescriber_license: script.prescriber.license_number,
       din_code: medication?.is_compound ? "" : medication?.din ?? "",
       quantity: String(medication?.quantity ?? ""),
