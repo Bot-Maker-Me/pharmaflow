@@ -242,6 +242,7 @@ class AgentConfig:
         # A learned sig correction is applied automatically only after staff made the SAME fix this many times
         # for the SAME drug. 0 = never rewrite, only show it as a hint.
         self.sig_apply_min_hits: int = cp.getint("Learning", "SIG_APPLY_MIN_HITS", fallback=2)
+        self.sig_apply_safe_only: bool = cp.getboolean("Learning", "SIG_APPLY_SAFE_ONLY", fallback=True)
         self.learn_sql_every: int = cp.getint("Learning", "SQL_LEARN_EVERY_SEC", fallback=900)
         self.learn_backfill_days: int = cp.getint("Learning", "SQL_BACKFILL_DAYS", fallback=365)   # only if rx_id is not set
         # With rx_id set, learning starts this many Rx rows back from the newest one (index seek, light on the server).
@@ -1641,6 +1642,28 @@ def norm_sig(value: Any) -> str:
     return " ".join(str(value or "").upper().replace(";", " ").split()).rstrip(".")
 
 
+_SIG_NOTE_RE = re.compile(
+    r"[\(\[]\s*LU[^\)\]]*[\)\]]"        # (LU CODE: 293)  [LU 383]
+    r"|\bLU\s*[:=]?\s*(?:CODE\s*[:=]?\s*)?\d+"  # LU=385
+    r"|\*\s*NOT COVERED[^*]*\*?"          # *NOT COVERED BY ODB*
+    r"|\bUNWRAP\s*&"
+)
+_SIG_FREQ = {"PRN", "QD", "BID", "TID", "QID", "HS", "QHS", "AM", "PM", "OD", "STAT"}
+
+
+def _sig_risk_tokens(sig: Any) -> List[str]:
+    """Tokens that carry dose / quantity / frequency meaning (anything with a digit, plus frequency words)."""
+    text = _SIG_NOTE_RE.sub(" ", norm_sig(sig))
+    toks = re.findall(r"[A-Z0-9]+", text)
+    return sorted(t for t in toks if any(ch.isdigit() for ch in t) or t in _SIG_FREQ)
+
+
+def sig_fix_is_safe(old: Any, new: Any) -> bool:
+    """True when a sig fix only changes wording / adds a note (LU code, NOT COVERED, UNWRAP...). Any change to a
+    dose, number, duration or frequency is NOT safe to auto-apply: it depends on the prescriber and patient."""
+    return _sig_risk_tokens(old) == _sig_risk_tokens(new)
+
+
 class Learner:
     """Two learning modes sharing one permanent store.
 
@@ -1651,7 +1674,8 @@ class Learner:
                               (drug + wrong sig -> right sig). After SIG_APPLY_MIN_HITS identical fixes for the same
                               drug the rule is applied automatically next time. If staff then undo it, the rule is
                               dropped / replaced, so a wrong lesson corrects itself.
-    Quantity / refill / drug changes are recorded in full history (corrections) and never auto-applied.
+    Only wording / note fixes are auto-applied (SIG_APPLY_SAFE_ONLY=true): a fix that changes a dose, number or
+    frequency stays a hint for staff. Quantity / refill / drug changes are recorded and never auto-applied.
     """
 
     def __init__(self, cfg: AgentConfig, path: Path, logger: logging.Logger):
@@ -1820,7 +1844,11 @@ class Learner:
                 if not rule or norm_sig(rule["target"]) == norm_sig(sig):
                     continue
                 info = {"from": str(sig), "to": rule["target"], "hits": rule["hits"]}
-                if kind == "sig_fix" and self.cfg.sig_apply_min_hits > 0 and rule["hits"] >= self.cfg.sig_apply_min_hits:
+                ready = kind == "sig_fix" and self.cfg.sig_apply_min_hits > 0 and rule["hits"] >= self.cfg.sig_apply_min_hits
+                if ready and self.cfg.sig_apply_safe_only and not sig_fix_is_safe(sig, rule["target"]):
+                    info["note"] = "changes dose/number/frequency - shown to staff, not applied"
+                    ready = False
+                if ready:
                     row["SigText"] = rule["target"]
                     row["_learned_applied"] = True
                     learned["sig_applied"] = info

@@ -102,6 +102,8 @@ ENABLED = true
 ; Apply a learned sig fix automatically after staff made the SAME fix this many times for the SAME drug.
 ; 0 = never rewrite, only show hints.
 SIG_APPLY_MIN_HITS = 2
+; true = only wording/note fixes (LU codes, NOT COVERED, ...) are auto-applied; dose/number/frequency changes stay hints.
+SIG_APPLY_SAFE_ONLY = true
 SQL_LEARN_EVERY_SEC = 900
 SQL_BACKFILL_DAYS = 365
 SQL_BACKFILL_ROWS = 300000

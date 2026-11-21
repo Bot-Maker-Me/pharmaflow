@@ -82,8 +82,10 @@ with the rest of the folder) and mirrored to the cloud.
    sent to the web app with a *suggested sig* (never filled in silently).
 2. **From staff corrections** - after an Rx is entered in Kroll, flow.py compares it with what PharmFlow planned.
    If staff changed the sig, the right sig is remembered for that drug. After `SIG_APPLY_MIN_HITS` (default 2)
-   identical fixes it is applied automatically next time; if staff undo it, the rule is removed. Quantity, refills
-   and drug changes are recorded but never auto-applied.
+   identical fixes it is applied automatically next time, but only if it is a wording/note fix (LU code, NOT COVERED,
+   UNWRAP...). A fix that changes a dose, number or frequency stays a hint for staff (`SIG_APPLY_SAFE_ONLY`, default
+   true). If staff undo an applied rule, it is removed. Quantity, refills and drug changes are recorded but never
+   auto-applied.
 
 ```powershell
 python flow.py --learning-report     # what has been learned so far
