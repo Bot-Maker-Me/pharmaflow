@@ -63,8 +63,9 @@ export default async function handler(req, res) {
       const inbound = {
         last_24h: recent.length,
         prescriptions_24h: recent.filter((f) => f.is_prescription).length,
-        items: faxes.slice(0, 15).map((f) => ({
+        items: faxes.slice(0, 40).map((f) => ({
           mail_id: f.mail_id,
+          created_at: f.created_at,
           received: f.received_label,
           from: f.from_label,
           doc_type: f.doc_type,

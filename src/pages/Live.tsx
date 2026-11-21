@@ -52,6 +52,7 @@ interface InboundFaxes {
   prescriptions_24h: number;
   items: Array<{
     mail_id: number;
+    created_at: string;
     received: string | null;
     from: string | null;
     doc_type: string | null;
@@ -161,10 +162,17 @@ export default function Live() {
   const flowing = stats?.last_received ? (now - Date.parse(stats.last_received)) / 1000 < 120 : false;
   const total = (stats?.auto ?? 0) + (stats?.exception ?? 0);
   const autoPct = total ? Math.round((100 * (stats?.auto ?? 0)) / total) : 0;
-  const chart = (stats?.per_minute ?? []).map((p) => ({
-    time: new Date(p.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    n: p.n,
-  }));
+  const faxTimes = (faxes?.items ?? []).map((f) => Date.parse(f.created_at));
+  const faxesLastMinute = faxTimes.filter((t) => now - t < 60_000).length;
+  const faxesLastHour = faxTimes.filter((t) => now - t < 3_600_000).length;
+  const chart = (stats?.per_minute ?? []).map((p) => {
+    const start = Date.parse(p.t);
+    return {
+      time: new Date(p.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      n: p.n,
+      f: faxTimes.filter((t) => t >= start && t < start + 60_000).length,
+    };
+  });
   const fields = Object.entries(stats?.fields ?? {});
   const reasons = Object.entries(stats?.reasons ?? {}).sort((a, b) => b[1] - a[1]);
 
@@ -216,8 +224,8 @@ export default function Live() {
       )}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
-        <Stat label="Last minute" value={stats?.last_minute ?? "–"} hint="prescriptions received" />
-        <Stat label="Last hour" value={stats?.last_hour ?? "–"} />
+        <Stat label="Last minute" value={stats?.last_minute ?? "–"} hint={`prescriptions received · ${faxesLastMinute} fax read`} />
+        <Stat label="Last hour" value={stats?.last_hour ?? "–"} hint={`${faxesLastHour} faxes read from Inbound Docs`} />
         <Stat label="Counted this week" value={stats?.since_start ?? "–"} />
         <Stat label="Would be AUTO" value={`${autoPct}%`} hint={`${stats?.auto ?? 0} auto · ${stats?.exception ?? 0} to a person`} />
         <Stat label="Compared with staff" value={stats?.compared ?? 0} hint={`${stats?.waiting ?? 0} waiting for staff entry`} />
@@ -245,7 +253,7 @@ export default function Live() {
       <div className="grid gap-5 lg:grid-cols-3">
         <Card className="flex flex-col lg:col-span-2">
           <CardHeader className="pb-2">
-            <CardTitle>Prescriptions per minute · last 30 min</CardTitle>
+            <CardTitle>Prescriptions (orange) and faxes read (green) per minute · last 30 min</CardTitle>
           </CardHeader>
           <CardContent className="h-56 min-h-56 flex-1 pt-0 lg:h-auto">
             <ResponsiveContainer width="100%" height="100%">
@@ -255,6 +263,7 @@ export default function Live() {
                 <YAxis tick={{ fontSize: 10, fontFamily: "IBM Plex Mono, monospace", fill: "#56636D" }} allowDecimals={false} width={32} axisLine={false} tickLine={false} />
                 <Tooltip cursor={{ fill: "rgba(242,140,27,0.12)" }} contentStyle={{ borderRadius: 0, border: "2px solid #101418", background: "#FAFAF7", fontFamily: "IBM Plex Mono, monospace", fontSize: 11 }} />
                 <Bar dataKey="n" fill="#F28C1B" isAnimationActive={false} />
+                <Bar dataKey="f" fill="#1F7A4D" isAnimationActive={false} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -313,7 +322,7 @@ export default function Live() {
         </CardHeader>
         <CardContent className="pt-0">
           <ul className="divide-y divide-pf-rule border border-pf-rule bg-card">
-            {(faxes?.items ?? []).map((f) => (
+            {(faxes?.items ?? []).slice(0, 15).map((f) => (
               <li key={f.mail_id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs">
                 <div className="flex min-w-0 items-center gap-3">
                   <span className="w-28 font-data text-muted-foreground tabular-nums">{f.received ?? "–"}</span>

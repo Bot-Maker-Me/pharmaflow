@@ -68,6 +68,16 @@ export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
       const q = new URL(req.url, "http://x").searchParams;
+      if (q.get("kind") === "faxes") {
+        // Prescriptions the agent read from Kroll's Inbound Docs (OCR), newest first, with a signed link to the fax image.
+        const fr = await fetch(
+          `${url.replace(/\/$/, "")}/rest/v1/inbound_faxes?select=mail_id,received_label,from_label,doc_type,summary,ocr,page_image_url,created_at&is_prescription=eq.true&order=created_at.desc&limit=40`,
+          { headers },
+        );
+        if (!fr.ok) return send(res, 500, { error: "Query failed" });
+        const faxes = await signImages(await fr.json(), url, key);
+        return send(res, 200, { ok: true, count: faxes.length, rows: faxes });
+      }
       const status = q.get("status") || "received";
       if (!STATUSES.includes(status)) return send(res, 400, { error: "Invalid status" });
       const limit = Math.min(Math.max(parseInt(q.get("limit") || "50", 10) || 50, 1), 200);

@@ -35,6 +35,29 @@ interface InboxRow {
   planned?: { ocr_merged?: Record<string, unknown> } | null;
 }
 
+interface FaxMed {
+  drug_name?: string;
+  strength?: string;
+  quantity?: number;
+  refills?: number;
+  sig?: string;
+  din?: string;
+}
+interface FaxRow {
+  mail_id: number;
+  received_label: string | null;
+  from_label: string | null;
+  page_image_url: string | null;
+  ocr: {
+    scripts?: Array<{
+      patient?: { full_name?: string; dob?: string };
+      prescriber?: { name?: string };
+      medications?: FaxMed[];
+      overall_confidence?: number;
+    }>;
+  } | null;
+}
+
 const TABS: Array<{ id: RowStatus; label: string }> = [
   { id: "received", label: "New" },
   { id: "processing", label: "In progress" },
@@ -48,6 +71,7 @@ export default function Inbox() {
   const [tab, setTab] = React.useState<RowStatus>("received");
   const [rows, setRows] = React.useState<InboxRow[]>([]);
   const [loading, setLoading] = React.useState(false);
+  const [faxes, setFaxes] = React.useState<FaxRow[]>([]);
 
   const endpoint = `${settings.apiBaseUrl.replace(/\/$/, "")}/api/queue`;
   const headers = React.useMemo(
@@ -77,6 +101,28 @@ export default function Inbox() {
   React.useEffect(() => {
     void load();
   }, [load]);
+
+  // Faxes the agent already read from Kroll's Inbound Docs (before staff fill them in).
+  React.useEffect(() => {
+    if (!settings.apiToken) return;
+    let cancelled = false;
+    const loadFaxes = async () => {
+      try {
+        const response = await fetch(`${endpoint}?kind=faxes`, { headers });
+        if (!response.ok) return;
+        const data = (await response.json()) as { rows: FaxRow[] };
+        if (!cancelled) setFaxes(data.rows);
+      } catch {
+        /* try again next tick */
+      }
+    };
+    void loadFaxes();
+    const timer = window.setInterval(() => void loadFaxes(), 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [endpoint, headers, settings.apiToken]);
 
   // Live feed: poll the queue so faxes arriving on the Kroll server appear without pressing Refresh.
   const knownIds = React.useRef<Set<number> | null>(null);
@@ -175,6 +221,56 @@ export default function Inbox() {
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-5 p-4 lg:p-6">
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <InboxIcon className="h-4 w-4" /> Faxes read from Kroll Inbound Docs
+          </CardTitle>
+          <CardDescription>
+            Prescription faxes the agent already read, before staff open them: what it found on the page. Ads and cover sheets are left out.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {faxes.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">No prescription faxes read yet.</p>
+          ) : (
+            <ul className="divide-y divide-border border border-border">
+              {faxes.map((fax) => {
+                const script = fax.ocr?.scripts?.[0];
+                const med = script?.medications?.[0];
+                return (
+                  <li key={fax.mail_id} className="flex flex-wrap items-center justify-between gap-3 p-3 text-sm">
+                    <div className="min-w-0">
+                      <p className="font-medium">
+                        {script?.patient?.full_name || "Patient not readable"}
+                        {script?.patient?.dob ? <span className="ml-2 font-mono text-xs text-muted-foreground">{script.patient.dob}</span> : null}
+                        <span className="ml-2 font-mono text-xs text-muted-foreground">{fax.received_label ?? ""}</span>
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {[med?.drug_name, med?.strength].filter(Boolean).join(" ") || "drug not readable"} · qty {med?.quantity ?? "?"} · refills{" "}
+                        {med?.refills ?? "?"} · {med?.sig || "no sig"} · Dr {script?.prescriber?.name || "?"} · from {fax.from_label ?? "unknown"}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {script?.overall_confidence != null && (
+                        <Badge variant="outline">{Math.round(script.overall_confidence * 100)}%</Badge>
+                      )}
+                      {fax.page_image_url && (
+                        <Button size="sm" variant="outline" asChild>
+                          <a href={fax.page_image_url} target="_blank" rel="noreferrer">
+                            View fax
+                          </a>
+                        </Button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 pb-3">
           <div>
