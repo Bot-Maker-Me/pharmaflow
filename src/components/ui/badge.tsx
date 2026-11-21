@@ -4,20 +4,20 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const badgeVariants = cva(
-  "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors focus:outline-none",
+  "inline-flex items-center gap-1 border px-2 py-0.5 font-data text-[11px] font-medium tracking-wide transition-colors focus:outline-none",
   {
     variants: {
       variant: {
-        default: "border-transparent bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary",
+        default: "border-pf-ink bg-pf-ink text-pf-sheet dark:border-pf-amber dark:bg-pf-amber dark:text-pf-ink",
         secondary: "border-transparent bg-secondary text-secondary-foreground",
-        destructive: "border-transparent bg-destructive/10 text-destructive",
-        outline: "border-border text-foreground",
+        destructive: "border-destructive bg-destructive/10 text-destructive",
+        outline: "border-pf-ink/40 bg-card text-foreground dark:border-border",
         success:
-          "border-transparent bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300",
-        warning: "border-transparent bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300",
-        info: "border-transparent bg-sky-100 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300",
+          "border-[#1F7A4D] bg-[#1F7A4D] text-white",
+        warning: "border-pf-amber bg-pf-amber/20 text-pf-ink dark:text-pf-amber",
+        info: "border-pf-rule bg-pf-paper text-pf-slate dark:bg-secondary dark:text-foreground",
         violet:
-          "border-transparent bg-violet-100 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300",
+          "border-pf-ink bg-card text-foreground",
       },
     },
     defaultVariants: {

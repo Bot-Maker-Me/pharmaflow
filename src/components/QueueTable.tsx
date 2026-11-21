@@ -73,8 +73,8 @@ export function QueueTable({
               <TableCell>
                 <div className="flex items-center gap-1.5">
                   <span className="font-mono text-xs text-muted-foreground">{primary?.din || "—"}</span>
-                  {hasDinIssue ? <ShieldAlert className="h-3.5 w-3.5 text-amber-500" /> : null}
-                  {hasCompound ? <FlaskConical className="h-3.5 w-3.5 text-violet-500" /> : null}
+                  {hasDinIssue ? <ShieldAlert className="h-3.5 w-3.5 text-pf-amber" /> : null}
+                  {hasCompound ? <FlaskConical className="h-3.5 w-3.5 text-pf-slate" /> : null}
                 </div>
               </TableCell>
               <TableCell>

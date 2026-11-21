@@ -180,7 +180,7 @@ export function DocumentViewer({
               <img src={pageImage} alt={`${document.name} page ${pageNumber}`} className="block w-full" />
             ) : (
               <div className="flex h-[420px] w-[320px] flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted-foreground">
-                <AlertTriangle className="h-5 w-5 text-amber-500" />
+                <AlertTriangle className="h-5 w-5 text-pf-amber" />
                 No preview available for this page.
               </div>
             )}

@@ -234,12 +234,12 @@ export default function Verify() {
 
           <div className="shrink-0 space-y-3 border-t border-border bg-card p-3">
             {issues.length ? (
-              <p className="text-[11px] text-amber-700">
+              <p className="text-[11px] text-pf-ink">
                 {issues.length} item(s) still need confirmation — pushing is allowed but flagged in the
                 audit trail.
               </p>
             ) : (
-              <p className="text-[11px] text-emerald-700">
+              <p className="text-[11px] text-[#1F7A4D]">
                 All fields verified against the DPD and provincial licence data.
               </p>
             )}

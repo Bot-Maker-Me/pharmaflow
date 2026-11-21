@@ -349,8 +349,8 @@ export default function Settings() {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2 pt-0">
-          <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900 dark:bg-emerald-950/30">
-            <ShieldCheck className="mt-0.5 h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+          <div className="flex items-start gap-3 border-2 border-[#1F7A4D] bg-[#1F7A4D]/10 p-3 dark:border-emerald-900 dark:bg-emerald-950/30">
+            <ShieldCheck className="mt-0.5 h-4 w-4 text-[#1F7A4D] dark:text-emerald-400" />
             <span>
               <span className="block text-sm font-medium text-foreground">DPD cross-reference active</span>
               <span className="block text-[11px] text-muted-foreground">

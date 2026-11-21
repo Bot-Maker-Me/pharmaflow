@@ -16,13 +16,13 @@ export function PmsSelector({ className }: { className?: string }) {
   const { settings, updateSettings } = useAppStore();
 
   return (
-    <div className={cn("flex items-center gap-2", className)}>
+    <div className={cn("hidden items-center gap-2 md:flex", className)}>
       <MonitorCog className="hidden h-4 w-4 text-muted-foreground sm:block" />
       <Select
         value={settings.pms}
         onValueChange={(value) => updateSettings({ pms: value as PmsId })}
       >
-        <SelectTrigger className="h-9 w-[190px]">
+        <SelectTrigger className="h-9 w-[220px]">
           <SelectValue placeholder="Select target PMS" />
         </SelectTrigger>
         <SelectContent>

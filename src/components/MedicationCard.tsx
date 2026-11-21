@@ -87,7 +87,7 @@ export function MedicationCard({
   }
 
   return (
-    <div className="rounded-xl border border-border bg-secondary/40 p-3">
+    <div className="border-2 border-pf-rule bg-secondary/40 p-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Medication {index + 1}
@@ -176,7 +176,7 @@ export function MedicationCard({
                   onClick={() => pickDin(candidate)}
                   className={cn(
                     "rounded-md border px-2 py-1 text-left text-[11px] transition-colors hover:bg-secondary",
-                    candidate.din === medication.din ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-950/40" : "border-border",
+                    candidate.din === medication.din ? "border-[#1F7A4D] bg-[#1F7A4D]/10" : "border-border",
                   )}
                   title={[candidate.company, candidate.form, candidate.strength].filter(Boolean).join(" · ")}
                 >
@@ -240,7 +240,7 @@ export function MedicationCard({
       {issues.length ? (
         <ul className="mt-3 space-y-1">
           {issues.map((issue) => (
-            <li key={issue} className="flex items-start gap-1.5 text-[11px] text-amber-700">
+            <li key={issue} className="flex items-start gap-1.5 text-[11px] text-pf-ink">
               <ShieldAlert className="mt-px h-3 w-3 shrink-0" />
               {issue}
             </li>

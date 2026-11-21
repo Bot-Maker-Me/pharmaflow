@@ -32,8 +32,8 @@ export function UploadDropzone({ onFiles, onLoadSample, busy }: UploadDropzonePr
         handleFiles(event.dataTransfer.files);
       }}
       className={cn(
-        "relative overflow-hidden rounded-xl border-2 border-dashed bg-card p-6 transition-colors",
-        dragging ? "border-primary bg-primary/5" : "border-border",
+        "relative overflow-hidden border-2 border-dashed bg-card p-6 transition-colors",
+        dragging ? "border-pf-amber bg-pf-amber/10" : "border-border",
       )}
     >
       <input
@@ -51,8 +51,8 @@ export function UploadDropzone({ onFiles, onLoadSample, busy }: UploadDropzonePr
       <div className="flex flex-col items-center gap-3 text-center">
         <span
           className={cn(
-            "flex h-14 w-14 items-center justify-center rounded-2xl transition-colors",
-            dragging ? "bg-primary text-primary-foreground" : "bg-secondary text-primary",
+            "flex h-14 w-14 items-center justify-center  transition-colors",
+            dragging ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground",
           )}
         >
           <UploadCloud className="h-6 w-6" />

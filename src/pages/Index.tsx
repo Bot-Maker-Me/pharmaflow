@@ -110,9 +110,9 @@ export default function Index() {
                       className={cn(
                         "flex items-center gap-2 rounded-lg border px-3 py-2 text-xs",
                         done
-                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          ? "border-[#1F7A4D] bg-[#1F7A4D]/10 text-[#1F7A4D]"
                           : current
-                            ? "border-sky-200 bg-sky-50 text-sky-700"
+                            ? "border-pf-rule bg-pf-paper text-pf-slate"
                             : "border-border bg-secondary/50 text-muted-foreground",
                       )}
                     >
@@ -218,9 +218,9 @@ export default function Index() {
                       className={cn(
                         "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full",
                         entry.tone === "ok"
-                          ? "bg-emerald-500"
+                          ? "bg-[#1F7A4D]"
                           : entry.tone === "warn"
-                            ? "bg-amber-500"
+                            ? "bg-pf-amber"
                             : "bg-slate-400",
                       )}
                     />

@@ -14,22 +14,22 @@ const META: Record<
 > = {
   connected: {
     label: "Local Helper Connected",
-    dot: "bg-emerald-500",
-    text: "text-emerald-700 dark:text-emerald-400",
+    dot: "bg-[#1F7A4D]",
+    text: "text-[#1F7A4D] dark:text-emerald-400",
     detail: "The desktop helper is listening and will type prescriptions straight into the PMS.",
     filled: true,
   },
   checking: {
     label: "Checking Local Helper…",
-    dot: "bg-amber-500",
-    text: "text-amber-700 dark:text-amber-400",
+    dot: "bg-pf-amber",
+    text: "text-pf-ink dark:text-pf-amber",
     detail: "Probing the helper's /health endpoint.",
     filled: true,
   },
   offline: {
     label: "Local Helper Offline",
-    dot: "bg-red-500",
-    text: "text-red-700 dark:text-red-400",
+    dot: "bg-destructive",
+    text: "text-destructive",
     detail:
       "No helper answered on this address. Keystroke pushes are simulated locally so you can still validate the data.",
     filled: false,
@@ -45,7 +45,7 @@ export function HelperStatus({ className }: { className?: string }) {
       <TooltipTrigger asChild>
         <span
           className={cn(
-            "inline-flex cursor-default items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium",
+            "inline-flex cursor-default items-center gap-2 border-2 border-pf-ink bg-card px-3 py-1.5 font-data text-[11px] font-medium dark:border-border",
             meta.text,
             className,
           )}
@@ -58,10 +58,10 @@ export function HelperStatus({ className }: { className?: string }) {
               )}
             />
             {helperStatus === "connected" ? (
-              <span className="absolute h-2.5 w-2.5 animate-ping rounded-full bg-emerald-500/60" />
+              <span className="absolute h-2.5 w-2.5 animate-ping rounded-full bg-[#1F7A4D]/50" />
             ) : null}
           </span>
-          <span className="whitespace-nowrap">{meta.label}</span>
+          <span className="hidden whitespace-nowrap sm:inline">{meta.label}</span>
         </span>
       </TooltipTrigger>
       <TooltipContent>

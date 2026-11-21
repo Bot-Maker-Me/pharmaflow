@@ -62,9 +62,9 @@ function Stat({ label, value, hint }: { label: string; value: React.ReactNode; h
   return (
     <Card>
       <CardContent className="p-4">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
-        {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
+        <p className="pf-eyebrow text-muted-foreground">{label}</p>
+        <p className="pf-display mt-2 text-[46px] tabular-nums">{value}</p>
+        {hint && <p className="mt-1.5 text-xs text-muted-foreground">{hint}</p>}
       </CardContent>
     </Card>
   );
@@ -152,15 +152,15 @@ export default function Live() {
   const reasons = Object.entries(stats?.reasons ?? {}).sort((a, b) => b[1] - a[1]);
 
   return (
-    <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-5 p-4 lg:p-6">
+    <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6 p-4 lg:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={agentOnline ? "default" : "destructive"} className="gap-1.5">
-            <span className={`h-2 w-2 rounded-full ${agentOnline ? "animate-pulse bg-emerald-300" : "bg-red-300"}`} />
+          <Badge variant={agentOnline ? "default" : "destructive"} className="gap-2 py-1">
+            <span className={`h-2 w-2 rounded-full ${agentOnline ? "animate-pulse bg-pf-amber" : "bg-destructive"}`} />
             Agent {agentOnline ? "online" : "OFFLINE"}
             {stats?.heartbeat && ` · ${stats.heartbeat.host} · ${stats.heartbeat.mode}${stats.heartbeat.version ? ` · agent v${stats.heartbeat.version}` : ""}`}
           </Badge>
-          <span className="text-xs text-muted-foreground">
+          <span className="font-data text-[11px] text-muted-foreground">
             last heartbeat {ago(stats?.heartbeat?.last_seen, now)} · last Rx {ago(stats?.last_received, now)}
           </span>
           {!!stats?.heartbeat?.incomplete && (
@@ -177,14 +177,14 @@ export default function Live() {
             {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
             {paused ? "Resume" : "Pause"}
           </Button>
-          <Button size="sm" onClick={() => void startShadowWeek()}>
+          <Button size="sm" variant="amber" onClick={() => void startShadowWeek()}>
             <PlayCircle className="h-4 w-4" /> Start shadow week now
           </Button>
         </div>
       </div>
 
       {error && (
-        <Card className="border-destructive/50">
+        <Card className="border-destructive">
           <CardContent className="flex items-center gap-2 p-3 text-sm text-destructive">
             <AlertTriangle className="h-4 w-4" /> {error}
           </CardContent>
@@ -208,16 +208,16 @@ export default function Live() {
       </div>
 
       {stats && stats.since_start > 0 && stats.compared === 0 && stats.waiting === 0 && stats.auto === 0 && (
-        <Card className="border-amber-500/50">
+        <Card className="border-pf-amber bg-pf-amber/10">
           <CardContent className="p-3 text-sm">
             Nothing is AUTO yet, so nothing can be compared. See the reasons below — usually a column in the
             [Schema] section of config.ini points at the wrong Kroll column. Run{" "}
-            <code className="rounded bg-muted px-1">python flow.py --profile PendingNewRx</code> on the server and send me the output.
+            <code className="bg-muted px-1 font-data text-[12px]">python flow.py --profile PendingNewRx</code> on the server and send me the output.
           </CardContent>
         </Card>
       )}
       {stats && stats.auto > 0 && stats.compared === 0 && (
-        <Card className="border-amber-500/50">
+        <Card className="border-pf-amber bg-pf-amber/10">
           <CardContent className="p-3 text-sm">
             Staff comparison has not produced results yet. Either staff have not entered those prescriptions in Kroll
             yet, or the [RxSchema] section in config.ini is missing so flow.py cannot find the Rx they typed.
@@ -226,18 +226,18 @@ export default function Live() {
       )}
 
       <div className="grid gap-5 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
+        <Card className="flex flex-col lg:col-span-2">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Prescriptions per minute (last 30 min)</CardTitle>
+            <CardTitle>Prescriptions per minute · last 30 min</CardTitle>
           </CardHeader>
-          <CardContent className="h-56 pt-0">
+          <CardContent className="h-56 min-h-56 flex-1 pt-0 lg:h-auto">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chart}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="time" tick={{ fontSize: 10 }} interval={4} />
-                <YAxis tick={{ fontSize: 10 }} allowDecimals={false} width={32} />
-                <Tooltip />
-                <Bar dataKey="n" fill="hsl(var(--primary))" radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                <CartesianGrid stroke="#C5CDD1" strokeDasharray="2 4" vertical={false} />
+                <XAxis dataKey="time" tick={{ fontSize: 10, fontFamily: "IBM Plex Mono, monospace", fill: "#56636D" }} interval={4} axisLine={{ stroke: "#101418", strokeWidth: 2 }} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fontFamily: "IBM Plex Mono, monospace", fill: "#56636D" }} allowDecimals={false} width={32} axisLine={false} tickLine={false} />
+                <Tooltip cursor={{ fill: "rgba(242,140,27,0.12)" }} contentStyle={{ borderRadius: 0, border: "2px solid #101418", background: "#FAFAF7", fontFamily: "IBM Plex Mono, monospace", fontSize: 11 }} />
+                <Bar dataKey="n" fill="#F28C1B" isAnimationActive={false} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -245,7 +245,7 @@ export default function Live() {
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Agent vs staff match</CardTitle>
+            <CardTitle>Agent vs staff match</CardTitle>
             <CardDescription>Needs ≥ 99.5% per field before going live</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 pt-0">
@@ -256,26 +256,28 @@ export default function Live() {
                 const pct = f.total ? (100 * f.match) / f.total : 0;
                 return (
                   <div key={name}>
-                    <div className="flex justify-between text-xs">
-                      <span className="font-medium">{name}</span>
-                      <span className="tabular-nums text-muted-foreground">
-                        {pct.toFixed(1)}% ({f.match}/{f.total})
+                    <div className="flex items-baseline justify-between">
+                      <span className="font-data text-[12px] font-medium">{name}</span>
+                      <span className="font-data text-[11px] tabular-nums text-muted-foreground">
+                        <span className={pct >= 99.5 ? "font-medium text-[#1F7A4D] dark:text-emerald-400" : "font-medium text-foreground"}>{pct.toFixed(1)}%</span>{" "}
+                        ({f.match}/{f.total})
                       </span>
                     </div>
-                    <div className="mt-1 h-2 overflow-hidden rounded bg-muted">
-                      <div className={`h-full ${pct >= 99.5 ? "bg-emerald-500" : "bg-amber-500"}`} style={{ width: `${pct}%` }} />
+                    <div className="relative mt-1.5 h-3 border-2 border-pf-ink bg-card dark:border-border">
+                      <div className={`h-full ${pct >= 99.5 ? "bg-[#1F7A4D]" : "bg-pf-amber"}`} style={{ width: `${pct}%` }} />
+                      <span aria-hidden className="absolute -bottom-0.5 -top-0.5 w-0.5 bg-pf-ink dark:bg-pf-sheet" style={{ left: "99.5%" }} />
                     </div>
                   </div>
                 );
               })
             )}
             {reasons.length > 0 && (
-              <div className="border-t border-border pt-3">
-                <p className="mb-1 text-xs font-medium">Why rows go to a person</p>
+              <div className="border-t-2 border-pf-ink pt-3 dark:border-border">
+                <p className="pf-eyebrow mb-2">Why rows go to a person</p>
                 {reasons.map(([reason, n]) => (
-                  <div key={reason} className="flex justify-between text-xs text-muted-foreground">
-                    <span>{reason}</span>
-                    <span className="tabular-nums">{n}</span>
+                  <div key={reason} className="flex justify-between border-b border-pf-rule py-1 text-xs last:border-0">
+                    <span className="text-muted-foreground">{reason}</span>
+                    <span className="font-data font-medium tabular-nums">{n}</span>
                   </div>
                 ))}
               </div>
@@ -286,11 +288,11 @@ export default function Live() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Live feed</CardTitle>
+          <CardTitle>Live feed</CardTitle>
           <CardDescription>Newest first, refreshes every {POLL_MS / 1000}s. No patient names are shown here.</CardDescription>
         </CardHeader>
         <CardContent className="pt-0">
-          <ul className="divide-y divide-border rounded-lg border border-border">
+          <ul className="divide-y divide-pf-rule border border-pf-rule bg-card">
             {rows.map((row) => {
               const mismatches = row.field_match
                 ? Object.entries(row.field_match)
@@ -301,28 +303,28 @@ export default function Live() {
                 <li
                   key={row.id}
                   className={`flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs transition-colors duration-1000 ${
-                    fresh.has(row.id) ? "bg-primary/15" : ""
+                    fresh.has(row.id) ? "pf-flash" : "hover:bg-pf-amber/10"
                   }`}
                 >
                   <div className="flex min-w-0 items-center gap-3">
-                    <span className="w-16 text-muted-foreground tabular-nums">{ago(row.received_at, now)}</span>
-                    <span className="font-mono">Rx #{row.pending_rx_id}</span>
-                    <span className="text-muted-foreground">
+                    <span className="w-16 font-data text-muted-foreground tabular-nums">{ago(row.received_at, now)}</span>
+                    <span className="font-data font-medium">Rx #{row.pending_rx_id}</span>
+                    <span className="font-data text-muted-foreground">
                       drug {row.drug_id ?? "–"} · qty {row.qty ?? "–"}
                     </span>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     {row.decision === "AUTO" ? (
-                      <Badge className="bg-emerald-600 hover:bg-emerald-600">AUTO</Badge>
+                      <Badge variant="success">AUTO</Badge>
                     ) : (
-                      <Badge variant="outline" title={(row.decision_issues ?? []).join(", ")}>
+                      <Badge variant="warning" title={(row.decision_issues ?? []).join(", ")}>
                         EXCEPTION{row.decision_issues?.length ? ` · ${row.decision_issues[0]}` : ""}
                       </Badge>
                     )}
                     {row.decision === "AUTO" &&
                       (row.compared_at && row.actual ? (
                         mismatches.length === 0 ? (
-                          <span className="flex items-center gap-1 text-emerald-600">
+                          <span className="flex items-center gap-1 font-medium text-[#1F7A4D] dark:text-emerald-400">
                             <CheckCircle2 className="h-3.5 w-3.5" /> matches staff
                           </span>
                         ) : (

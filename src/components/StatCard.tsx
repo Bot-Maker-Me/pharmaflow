@@ -17,21 +17,21 @@ export function StatCard({
   tone?: "default" | "success" | "warning" | "info";
 }) {
   const toneClass = {
-    default: "bg-secondary text-secondary-foreground",
-    success: "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400",
-    warning: "bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-400",
-    info: "bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400",
+    default: "bg-secondary text-foreground",
+    success: "bg-[#1F7A4D] text-white",
+    warning: "bg-pf-amber text-pf-ink",
+    info: "bg-pf-ink text-pf-sheet dark:bg-secondary dark:text-foreground",
   }[tone];
 
   return (
     <Card className="p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums text-foreground">{value}</p>
-          {hint ? <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p> : null}
+          <p className="pf-eyebrow text-muted-foreground">{label}</p>
+          <p className="pf-display mt-2 text-[44px] tabular-nums text-foreground">{value}</p>
+          {hint ? <p className="mt-1.5 text-xs text-muted-foreground">{hint}</p> : null}
         </div>
-        <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", toneClass)}>
+        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center", toneClass)}>
           <Icon className="h-4 w-4" />
         </span>
       </div>
