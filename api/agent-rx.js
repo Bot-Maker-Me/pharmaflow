@@ -311,7 +311,7 @@ export default async function handler(req, res) {
     ocr_strength: merged.medications[0]?.strength || null,
     ocr_health_card: merged.patient?.health_card_num || null,
     raw_payload: { ...body, page_images: pageImages.length ? ["[omitted]"] : [] },
-    status: "received",
+    // status is left to the column default ("received") so a later update never resets a row staff already opened
   };
   if (!cfg) {
     return send(res, 202, { ok: true, stored: false, ocr: Boolean(ocr.scripts[0]), ocr_error: ocr.error || null, merged });

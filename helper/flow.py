@@ -364,6 +364,10 @@ class LocalStore:
                     pending_rx_id INTEGER PRIMARY KEY,
                     first_seen    TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS early_ocr (       -- fax already sent to the waiting list before staff filled it in
+                    pending_rx_id INTEGER PRIMARY KEY,
+                    pushed_at     TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS meta (
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -420,6 +424,23 @@ class LocalStore:
                 "INSERT OR IGNORE INTO processed (pending_rx_id, processed_at) VALUES (?, ?)",
                 (pending_rx_id, dt.datetime.now(dt.timezone.utc).isoformat()),
             )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # -- early fax push -------------------------------------------------------
+    def has_early(self, pending_rx_id: int) -> bool:
+        conn = self._connect()
+        try:
+            return conn.execute("SELECT 1 FROM early_ocr WHERE pending_rx_id = ?", (pending_rx_id,)).fetchone() is not None
+        finally:
+            conn.close()
+
+    def mark_early(self, pending_rx_id: int) -> None:
+        conn = self._connect()
+        try:
+            conn.execute("INSERT OR IGNORE INTO early_ocr(pending_rx_id, pushed_at) VALUES (?, ?)",
+                         (pending_rx_id, dt.datetime.now(dt.timezone.utc).isoformat()))
             conn.commit()
         finally:
             conn.close()
@@ -2005,6 +2026,31 @@ class PharmFlowAgent:
                 self.store.spool_payload(pending_id, payload, err)
         self.store.mark_processed(pending_id)
 
+    def _early_ocr(self, row: Dict[str, Any]) -> None:
+        """A fax just arrived and staff have not filled the pending Rx in yet: read the fax image now and put it
+        on the waiting list. When staff finish, the normal push updates the same entry (no duplicate) and the
+        comparison / learning loop runs as usual. Never raises."""
+        try:
+            raw_id = row.get("PendingRxId")
+            if raw_id is None or not self.cfg.cloud_enabled or not row.get("ScriptImageId"):
+                return
+            pid = int(raw_id)
+            if self.store.has_early(pid) or self.store.is_processed(pid):
+                return
+            with_img = self.db.attach_image(row)
+            if not with_img.get("page_image_data_url"):
+                return
+            payload = build_payload(row, self.cfg)          # no decision yet: staff have not entered it
+            payload["page_images"] = [with_img["page_image_data_url"]]
+            ok, err, _ = self.cloud.push_rx(payload)
+            if ok:
+                self.store.mark_early(pid)
+                self.log.info("Fax for PendingRxId=%s read and placed on the waiting list (staff have not filled it in yet)", pid)
+            else:
+                self.log.warning("Early fax read failed for PendingRxId=%s (%s) - will retry", pid, err)
+        except Exception as exc:
+            self.log.warning("Early fax read skipped for PendingRxId=%s: %s", row.get("PendingRxId"), exc)
+
     def _hint_din_from_kroll(self, pending_id: int) -> None:
         """Fax had no DIN? Look the drug up in Kroll's own drug table and tell the cloud what we found."""
         body = getattr(self.cloud, "last_body", None) or {}
@@ -2163,6 +2209,8 @@ class PharmFlowAgent:
             elif core_complete(row):
                 self._process_row(row)
                 self.store.drop_incomplete(pid)
+            elif now - dt.datetime.fromisoformat(first_seen) <= limit and not self.store.has_early(pid):
+                self._early_ocr(row)                              # first attempt failed (cloud / image): try again
             elif now - dt.datetime.fromisoformat(first_seen) > limit:
                 if is_blank_stub(row):
                     self.store.mark_processed(pid)            # never filled in: ignore, do not report
@@ -2183,6 +2231,7 @@ class PharmFlowAgent:
                     continue
                 if self.cfg.wait_hours and not core_complete(row):
                     self.store.add_incomplete(int(rid))     # staff are still filling it in: re-read later
+                    self._early_ocr(row)                    # ...but read the fax now and show it on the waiting list
                     continue
                 self._process_row(row)
             if rows:
