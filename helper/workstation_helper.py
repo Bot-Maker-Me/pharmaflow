@@ -85,6 +85,7 @@ class Settings:
     require_window_check: bool = True
     window_hints: Dict[str, str] = dict(DEFAULT_WINDOW_HINTS)
     step_delay: float = 0.4
+    wait_for_window: float = 10.0
 
 
 SETTINGS = Settings()
@@ -120,6 +121,7 @@ def load_config(path: Path = CONFIG_PATH) -> None:
     SETTINGS.token = cp.get("Helper", "TOKEN", fallback="").strip()
     SETTINGS.require_window_check = cp.getboolean("Helper", "REQUIRE_WINDOW_CHECK", fallback=True)
     SETTINGS.step_delay = cp.getfloat("Helper", "STEP_DELAY_SEC", fallback=0.4)
+    SETTINGS.wait_for_window = cp.getfloat("Helper", "WAIT_FOR_WINDOW_SEC", fallback=10.0)
     for system in TARGET_SYSTEMS:
         hint = cp.get("Helper", f"WINDOW_{system}", fallback="").strip()
         if hint:
@@ -150,7 +152,13 @@ def _check_window(target: str) -> None:
     if not SETTINGS.require_window_check or SETTINGS.dry_run:
         return
     hint = SETTINGS.window_hints.get(target, "")
+    # After clicking Push in the browser, the browser is in front. Give staff a few
+    # seconds to click into Kroll before giving up.
+    deadline = time.time() + SETTINGS.wait_for_window
     title = foreground_window_title()
+    while (not title or hint not in title.lower()) and time.time() < deadline:
+        time.sleep(0.3)
+        title = foreground_window_title()
     if not title or hint not in title.lower():
         raise WrongWindow(
             f"The active window is not {target.title()} (expected the title to contain "
