@@ -1,3 +1,4 @@
+import { applySigLearning } from "../server/learning.js";
 import { timingSafeEqual } from "node:crypto";
 
 import { findDinCandidates, pickUnique } from "../server/dpd.js";
@@ -141,6 +142,25 @@ async function learnedKrollDrug(cfg, storeId, din) {
   }
 }
 
+/** Sig fixes staff made before (same text -> same correction, 2+ times). */
+async function loadSigMappings(cfg, storeId) {
+  if (!cfg) return [];
+  try {
+    const q = new URLSearchParams({
+      store_id: `eq.${storeId}`,
+      kind: "eq.text_replace",
+      source_key: "like.*sig::*",
+      hit_count: "gte.2",
+      select: "kind,source_key,target_value,hit_count",
+      limit: "300",
+    });
+    const resp = await fetch(`${cfg.url}/rest/v1/learned_mappings?${q}`, { headers: sbHeaders(cfg.key) });
+    return resp.ok ? await resp.json() : [];
+  } catch {
+    return [];
+  }
+}
+
 async function uploadImage(cfg, storeId, pendingRxId, dataUrl) {
   const parsed = parseDataUrl(dataUrl);
   if (!parsed) return null;
@@ -248,6 +268,12 @@ export default async function handler(req, res) {
     } catch {
       /* DPD unreachable: staff still pick the DIN in Verify */
     }
+  }
+  const sigFix = applySigLearning(med0.sig, await loadSigMappings(cfg, storeId));
+  if (sigFix.applied) {
+    med0.sig = sigFix.sig;
+    med0.sig_learned = sigFix.applied;
+    merged.flags = [`Sig auto-corrected from staff's earlier fix (${sigFix.applied.hits}x) - please confirm`];
   }
   const suggestion = await learnedKrollDrug(cfg, storeId, merged.medications[0]?.din);
   const row = {

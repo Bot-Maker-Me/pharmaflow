@@ -15,7 +15,7 @@ import { timingSafeEqual } from "node:crypto";
 
 import { findDinCandidates, pickUnique } from "../server/dpd.js";
 import { parseModelJson } from "../server/jsonrepair.js";
-import { MIN_HITS_REWRITE, isAutoRewritePath, normDin, normText } from "../server/learning.js";
+import { MIN_HITS_REWRITE, applySigLearning, isAutoRewritePath, normDin, normText } from "../server/learning.js";
 
 const MAX_PAGES = 8;
 const MAX_IMAGE_CHARS = 3_200_000;
@@ -160,7 +160,7 @@ async function loadMappings(storeId) {
       store_id: `eq.${storeId}`,
       select: "kind,source_key,target_value,hit_count",
       order: "hit_count.desc",
-      limit: "120",
+      limit: "400",
     });
     const resp = await fetch(`${cfg.url}/rest/v1/learned_mappings?${q}`, {
       headers: {
@@ -181,7 +181,8 @@ async function loadMappings(storeId) {
  *   - din_to_drug / din_to_strength: a DIN identifies the product. Fill when empty; overwrite
  *     only after the mapping was confirmed MIN_HITS_REWRITE times.
  *   - text_replace on patient/prescriber name + licence: exact-string spelling fixes, >= MIN_HITS_REWRITE.
- * Quantity, refills, sig, drug name and strength are NEVER rewritten here; the client flags them.
+ * Sig is rewritten only when the exact same sig was corrected to the same text >= MIN_HITS_REWRITE times (and is flagged
+ * for confirmation). Quantity, refills, drug name and strength are NEVER rewritten here; the client flags them.
  */
 function applyMappingsToScript(script, mappings) {
   if (!mappings.length) return { script, applied: 0 };
@@ -224,7 +225,17 @@ function applyMappingsToScript(script, mappings) {
     }
   }
 
-  return { script: { ...script, patient, prescriber, medications }, applied };
+  const flags = [...(script.flags || [])];
+  for (const med of medications) {
+    const { sig, applied: fix } = applySigLearning(med.sig, mappings);
+    if (fix) {
+      med.sig = sig;
+      applied += 1;
+      flags.push(`Sig auto-corrected from staff's earlier fix ("${fix.from}" -> "${fix.to}", confirmed ${fix.hits}x) - please confirm`);
+    }
+  }
+
+  return { script: { ...script, patient, prescriber, medications, ...(flags.length ? { flags } : {}) }, applied };
 }
 
 /** Non-PHI hints built server-side so learning works even when the browser cache is empty. */

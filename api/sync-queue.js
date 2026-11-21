@@ -15,7 +15,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 
-import { bumpMapping, diffAgainstKroll, insertFeedback, normDin } from "../server/learning.js";
+import { bumpMapping, diffAgainstKroll, inferMappings, insertFeedback, normDin } from "../server/learning.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -110,6 +110,14 @@ async function handleShadowResult(body, cfg, res) {
           source_key: din,
           target_value: drugId,
         });
+      }
+
+      // Staff changed the sig/qty/refills the system produced: remember it, but only count a NEW edit
+      // (a re-report of the same Kroll value must not inflate the hit count).
+      if (prev.actual?.rx_sig == null || String(prev.actual.rx_sig).trim() !== String(actual.rx_sig ?? "").trim()) {
+        for (const m of inferMappings(storeId, feedback.filter((f) => /\.(sig|quantity|refills)$/.test(f.field_path)))) {
+          try { await bumpMapping(cfg, headers, m); } catch { /* never block the comparison */ }
+        }
       }
 
       const suggested = planned.learning?.suggested_drug_id;

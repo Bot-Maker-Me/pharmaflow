@@ -264,3 +264,15 @@ describe("/api/sync-queue shadow_result (learn from Kroll)", () => {
     assert.equal(r.status, 200);
   });
 });
+
+import { applySigLearning } from "./learning.js";
+
+it("sig learning: applied only after 2 confirmations and exact text", () => {
+  const m = (hits) => [{ kind: "text_replace", source_key: "medications[0].sig::take 1 cap daily", target_value: "T1C PO QD", hit_count: hits }];
+  assert.equal(applySigLearning("Take 1 cap  daily", m(1)).applied, null);
+  const r = applySigLearning("Take 1 cap  daily", m(2));
+  assert.equal(r.sig, "T1C PO QD");
+  assert.equal(r.applied.hits, 2);
+  assert.equal(applySigLearning("take 2 caps daily", m(5)).applied, null);
+  assert.equal(applySigLearning("", m(5)).applied, null);
+});

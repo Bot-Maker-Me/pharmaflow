@@ -48,6 +48,28 @@ export function isFlagOnlyPath(path) {
 }
 
 /**
+ * Sig learning: when staff changed the SAME sig text to the SAME corrected sig at least MIN_HITS_REWRITE
+ * times, apply that correction automatically next time and report it so the screen can ask for confirmation.
+ * Matching is exact on the normalised text (case/space-insensitive), so a different sig is never touched.
+ * Returns { sig, applied: null | {from, to, hits} }.
+ */
+export function applySigLearning(sig, mappings) {
+  const current = normText(sig);
+  if (!current) return { sig, applied: null };
+  let best = null;
+  for (const m of mappings || []) {
+    if (m.kind !== "text_replace" || (m.hit_count || 0) < MIN_HITS_REWRITE) continue;
+    const key = String(m.source_key || "");
+    const sep = key.indexOf("::");
+    if (sep < 0 || canonicalPath(key.slice(0, sep)) !== "sig") continue;
+    if (normText(key.slice(sep + 2)).toUpperCase() !== current.toUpperCase()) continue;
+    if (!best || (m.hit_count || 0) > best.hit_count) best = m;
+  }
+  if (!best || normText(best.target_value).toUpperCase() === current.toUpperCase()) return { sig, applied: null };
+  return { sig: best.target_value, applied: { from: sig, to: best.target_value, hits: best.hit_count } };
+}
+
+/**
  * Turn correction rows into reusable mappings.
  * rows: {field_path, original_value, corrected_value, context}
  */
