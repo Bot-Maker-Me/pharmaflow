@@ -42,5 +42,6 @@ The server runs it as the Windows scheduled task "PharmFlow Agent" (SYSTEM, at s
 ## Saving tokens when working here
 - Do not read `flow.py` whole: grep for the function, read that range.
 - Ignore `node_modules`, `dist`, `helper/.venv`, `helper/logs`, `*.db` (see `.claude/settings.json`).
-- Optional code graph: `pip install graphifyy`, then `graphify update .` (local, no model cost); read `graphify-out/GRAPH_REPORT.md`
-  and use `graphify explain "Learner"` / `graphify path "A" "B"` instead of grepping broadly. `graphify-out/` is gitignored; rebuild after big changes.
+- Code graph: a SessionStart hook in `.claude/settings.json` installs graphifyy if missing and runs `graphify update .` (local, no model cost).
+  If `graphify-out/GRAPH_REPORT.md` exists, read it first, then use `graphify explain "Learner"` / `graphify path "A" "B"` instead of grepping broadly.
+  If it is missing, run `pip install -q graphifyy && graphify update .` yourself. `graphify-out/` is gitignored. Rebuild after big changes with `graphify update .`.
