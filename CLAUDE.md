@@ -76,7 +76,7 @@ CLI flags: `--discover` list DB tables/columns and exit | `--skip-backlog` ignor
 
 ### Web app routes (src/App.tsx)
 `/` -> Landing, `/login` -> Login, `(index)` -> Index, `verify` -> Verify, `verify/:scriptId` -> Verify, `live` -> Live, `inbox` -> Inbox, `queue` -> Queue, `settings` -> Settings, `*` -> NotFound
-Components: AppShell, Confidence, ConfidenceChart, ConfidenceField, DocumentViewer, HelperStatus, ManualEntryDialog, MedicationCard, PmsSelector, PushDialog, QueueTable, QuickActions, RequireAuth, ScriptWorkspace, StatCard, UploadDropzone, ZzTmp
+Components: AppShell, Confidence, ConfidenceChart, ConfidenceField, DocumentViewer, HelperStatus, ManualEntryDialog, MedicationCard, PmsSelector, PushDialog, QueueTable, QuickActions, RequireAuth, ScriptWorkspace, StatCard, UploadDropzone
 
 ### Database and scripts
 Supabase migrations (8), newest last: 20261103_shadow_daily_report.sql, 20261104_extraction_learning.sql, 20261104_live_dashboard.sql, 20261105_multi_tenant_security.sql, 20261106_script_image_ocr.sql, 20261119_learning_loop.sql
