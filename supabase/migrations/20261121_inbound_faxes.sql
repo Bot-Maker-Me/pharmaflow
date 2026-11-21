@@ -17,3 +17,7 @@ CREATE TABLE IF NOT EXISTS public.inbound_faxes (
 );
 CREATE INDEX IF NOT EXISTS idx_inbound_faxes_store_created ON public.inbound_faxes (store_id, created_at DESC);
 ALTER TABLE public.inbound_faxes ENABLE ROW LEVEL SECURITY;
+
+-- The cloud functions use the service role; tables made through migrations need explicit grants.
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.inbound_faxes TO service_role;
+GRANT USAGE, SELECT ON SEQUENCE public.inbound_faxes_id_seq TO service_role;
