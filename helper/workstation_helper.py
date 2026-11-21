@@ -148,6 +148,38 @@ def foreground_window_title() -> str:
     return buf.value
 
 
+def foreground_process_name() -> str:
+    """Program file name of the front window, e.g. 'chrome.exe' (empty if unknown)."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ctypes.byref(pid))
+        handle = kernel32.OpenProcess(0x1000, False, pid.value)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ""
+        try:
+            size = wintypes.DWORD(520)
+            buf = ctypes.create_unicode_buffer(size.value)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                return buf.value.replace("/", "\\").split("\\")[-1]
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def foreground_window_info() -> str:
+    """Window title plus program name; WINDOW_KROLL may match either."""
+    title = foreground_window_title()
+    exe = foreground_process_name()
+    return f"{title} | {exe}" if exe else title
+
+
 def _title_matches(title: str, hint: str) -> bool:
     """`hint` may hold several words separated by commas: any one of them matching is enough."""
     low = (title or "").lower()
@@ -161,12 +193,12 @@ def _check_window(target: str) -> None:
     # After clicking Push in the browser, the browser is in front. Give staff a few
     # seconds to click into Kroll before giving up.
     deadline = time.time() + SETTINGS.wait_for_window
-    title = foreground_window_title()
+    title = foreground_window_info()
     while not _title_matches(title, hint) and time.time() < deadline:
         time.sleep(0.3)
-        title = foreground_window_title()
+        title = foreground_window_info()
     if not _title_matches(title, hint):
-        seen = (title or "").strip()[:60] or "unknown"
+        seen = (title or "").strip()[:90] or "unknown"
         raise WrongWindow(
             f"Kroll was not the front window (it was '{seen}'; expected a title containing "
             f"'{hint}'). Click into Kroll within {int(SETTINGS.wait_for_window)} seconds after pressing Push."
@@ -437,7 +469,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.show_window:
         print("Click into the Kroll window now (5 seconds)...")
         time.sleep(5)
-        print(f"Window title: {foreground_window_title()!r}")
+        print(f"Window title: {foreground_window_title()!r}   program: {foreground_process_name()!r}")
         return 0
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
