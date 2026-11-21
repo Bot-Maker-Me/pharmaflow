@@ -94,7 +94,7 @@ KNOWN_TABLES: List[str] = [
 
 # [RxSchema] keys (all optional; --shadow-report needs the table + the compared columns).
 RX_SCHEMA_KEYS = [
-    "rx_table", "rx_link_col",       # rx_link_col = column holding the PendingRxId, if Kroll keeps one
+    "rx_table", "rx_id", "rx_link_col",       # rx_link_col = column holding the PendingRxId, if Kroll keeps one
     "rx_pat_id", "rx_doc_id", "rx_drug_id", "rx_qty", "rx_refills", "rx_sig", "rx_created",
 ]
 
@@ -243,7 +243,9 @@ class AgentConfig:
         # for the SAME drug. 0 = never rewrite, only show it as a hint.
         self.sig_apply_min_hits: int = cp.getint("Learning", "SIG_APPLY_MIN_HITS", fallback=2)
         self.learn_sql_every: int = cp.getint("Learning", "SQL_LEARN_EVERY_SEC", fallback=900)
-        self.learn_backfill_days: int = cp.getint("Learning", "SQL_BACKFILL_DAYS", fallback=365)
+        self.learn_backfill_days: int = cp.getint("Learning", "SQL_BACKFILL_DAYS", fallback=365)   # only if rx_id is not set
+        # With rx_id set, learning starts this many Rx rows back from the newest one (index seek, light on the server).
+        self.learn_backfill_rows: int = cp.getint("Learning", "SQL_BACKFILL_ROWS", fallback=300000)
         self.suggest_min_samples: int = cp.getint("Learning", "SUGGEST_MIN_SAMPLES", fallback=5)
         self.suggest_min_share: float = cp.getfloat("Learning", "SUGGEST_MIN_SHARE", fallback=0.6)
 
@@ -782,8 +784,40 @@ def auto_find(conn, image_id: Any):
     return None
 
 
+def native_check(conn, image_ids):
+    """Test Kroll's own image path (ScriptImage -> ScriptImageContent) and print columns / errors."""
+    print("Kroll native image path (what the agent really uses):")
+    cur = conn.cursor()
+    try:
+        for t in ("ScriptImage", "ScriptImageContent"):
+            cur.execute("SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? "
+                        "ORDER BY ORDINAL_POSITION", (t,))
+            cols = [f"{a} ({b})" for a, b in cur.fetchall()]
+            print(f"  dbo.{t}: " + (", ".join(cols) if cols else "TABLE NOT FOUND"))
+        for image_id in image_ids:
+            try:
+                cur.execute("SELECT TOP 1 c.Content, c.ContentCompressionType FROM dbo.ScriptImage s WITH (NOLOCK) "
+                            "JOIN dbo.ScriptImageContent c WITH (NOLOCK) ON c.ID = s.ScriptImageContentId WHERE s.Id = ?",
+                            (image_id,))
+                row = cur.fetchone()
+            except Exception as exc:
+                print(f"  ScriptImageId {image_id}: QUERY FAILED -> {exc}")
+                continue
+            if not row or row[0] is None:
+                print(f"  ScriptImageId {image_id}: no row / empty content")
+                continue
+            out = _decode_content(bytes(row[0]), row[1])
+            kind = ("JPEG" if out[:3] == b"\xff\xd8\xff" else "PNG" if out[:4] == b"\x89PNG" else
+                    "TIFF" if out[:2] in (b"II", b"MM") else "PDF" if out[:4] == b"%PDF" else "UNKNOWN")
+            print(f"  ScriptImageId {image_id}: OK  {len(out):,} bytes, {kind} (compression={row[1]})")
+    finally:
+        cur.close()
+    print()
+
+
 def find_image_source(conn, image_ids):
     """Diagnostic for `flow.py --find-images`: test real ids against every binary column and report."""
+    native_check(conn, image_ids)
     print("\nBinary columns in this database (best match first):")
     cands = binary_candidates(conn)
     for score, table, col, ids in cands:
@@ -1216,6 +1250,31 @@ class KrollDB:
             cur.execute(f"SELECT TOP {int(top)} {select} FROM {r['rx_table']} WITH (NOLOCK) "
                         f"WHERE {r['rx_created']} > ? AND {r['rx_sig']} IS NOT NULL ORDER BY {r['rx_created']} ASC",
                         [since])
+            names = [c[0] for c in cur.description]
+            return [dict(zip(names, row)) for row in cur.fetchall()]
+        finally:
+            cur.close()
+
+    def max_rx_id(self) -> int:
+        r = self.cfg.rx_schema
+        cur = self.ensure().cursor()
+        try:
+            cur.execute(f"SELECT MAX({r['rx_id']}) FROM {r['rx_table']} WITH (NOLOCK)")
+            v = cur.fetchone()[0]
+            return int(v) if v is not None else 0
+        finally:
+            cur.close()
+
+    def fetch_rx_by_id(self, after_id: int, top: int = 500) -> List[Dict[str, Any]]:
+        """Finished Rx rows with id > after_id, oldest first (primary-key seek: cheap even on millions of rows)."""
+        r = self.cfg.rx_schema
+        cols = [("id", r["rx_id"]), ("drug", r["rx_drug_id"]), ("sig", r["rx_sig"]),
+                ("doc", r["rx_doc_id"]), ("qty", r["rx_qty"]), ("refills", r["rx_refills"])]
+        select = ", ".join(f"{c} AS {a}" for a, c in cols if c)
+        cur = self.ensure().cursor()
+        try:
+            cur.execute(f"SELECT TOP {int(top)} {select} FROM {r['rx_table']} WITH (NOLOCK) "
+                        f"WHERE {r['rx_id']} > ? AND {r['rx_sig']} IS NOT NULL ORDER BY {r['rx_id']} ASC", [after_id])
             names = [c[0] for c in cur.description]
             return [dict(zip(names, row)) for row in cur.fetchall()]
         finally:
@@ -1739,26 +1798,33 @@ class Learner:
     # ---- mode 1: learn from finished prescriptions in Kroll SQL ------------------------------------
     def learn_from_sql(self, db: "KrollDB") -> None:
         r = self.cfg.rx_schema
-        if not (r["rx_table"] and r["rx_drug_id"] and r["rx_sig"] and r["rx_created"]):
+        by_id = bool(r["rx_id"])
+        if not (r["rx_table"] and r["rx_drug_id"] and r["rx_sig"] and (by_id or r["rx_created"])):
             if not self._warned:
                 self._warned = True
-                self.log.info("SQL learning off: set rx_table, rx_drug_id, rx_sig and rx_created in [RxSchema]")
+                self.log.info("SQL learning off: set rx_table, rx_drug_id, rx_sig and rx_id (or rx_created) in [RxSchema]")
             return
-        wm_text = self._meta("sql_wm")
-        wm = dt.datetime.fromisoformat(wm_text) if wm_text else dt.datetime.now() - dt.timedelta(days=self.cfg.learn_backfill_days)
+        if by_id:
+            text = self._meta("sql_id_wm")
+            wm: Any = int(text) if text else max(0, db.max_rx_id() - self.cfg.learn_backfill_rows)
+            fetch = lambda w: db.fetch_rx_by_id(w, 500)
+        else:
+            text = self._meta("sql_wm")
+            wm = dt.datetime.fromisoformat(text) if text else dt.datetime.now() - dt.timedelta(days=self.cfg.learn_backfill_days)
+            fetch = lambda w: db.fetch_rx_history(w, 500)
         seen = 0
         for _ in range(20):                       # up to 10k rows per cycle, then continue next cycle
-            rows = db.fetch_rx_history(wm, 500)
+            rows = fetch(wm)
             if not rows:
                 self._backlog = False
                 break
             c = self._conn()
             try:
                 for x in rows:
+                    marker = x.get("id") if by_id else x.get("created")
+                    if marker is not None and marker > wm:
+                        wm = marker
                     ns = norm_sig(x.get("sig"))
-                    created = x.get("created")
-                    if isinstance(created, dt.datetime) and created > wm:
-                        wm = created
                     if not ns or x.get("drug") in (None, ""):
                         continue
                     c.execute("""INSERT INTO usage(drug_id,doc_id,sig_norm,sig_raw,n) VALUES(?,?,?,?,1)
@@ -1768,7 +1834,7 @@ class Learner:
                 c.commit()
             finally:
                 c.close()
-            self._set_meta("sql_wm", wm.isoformat())
+            self._set_meta("sql_id_wm" if by_id else "sql_wm", str(wm) if by_id else wm.isoformat())
             self._backlog = len(rows) >= 500
             if len(rows) < 500:
                 break

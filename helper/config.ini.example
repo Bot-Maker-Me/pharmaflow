@@ -81,6 +81,7 @@ STEP_DELAY_SEC = 0.4
 
 [RxSchema]
 rx_table = dbo.Rx
+rx_id = ID
 rx_pat_id = PatID
 rx_doc_id = DocID
 rx_drug_id = DrgID
@@ -103,6 +104,7 @@ ENABLED = true
 SIG_APPLY_MIN_HITS = 2
 SQL_LEARN_EVERY_SEC = 900
 SQL_BACKFILL_DAYS = 365
+SQL_BACKFILL_ROWS = 300000
 ; Suggest a sig for a blank one only when it is the clear favourite for that drug / prescriber.
 SUGGEST_MIN_SAMPLES = 5
 SUGGEST_MIN_SHARE = 0.6
