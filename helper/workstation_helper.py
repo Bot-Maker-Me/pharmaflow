@@ -148,6 +148,12 @@ def foreground_window_title() -> str:
     return buf.value
 
 
+def _title_matches(title: str, hint: str) -> bool:
+    """`hint` may hold several words separated by commas: any one of them matching is enough."""
+    low = (title or "").lower()
+    return bool(low) and any(h.strip() and h.strip() in low for h in hint.split(","))
+
+
 def _check_window(target: str) -> None:
     if not SETTINGS.require_window_check or SETTINGS.dry_run:
         return
@@ -156,13 +162,14 @@ def _check_window(target: str) -> None:
     # seconds to click into Kroll before giving up.
     deadline = time.time() + SETTINGS.wait_for_window
     title = foreground_window_title()
-    while (not title or hint not in title.lower()) and time.time() < deadline:
+    while not _title_matches(title, hint) and time.time() < deadline:
         time.sleep(0.3)
         title = foreground_window_title()
-    if not title or hint not in title.lower():
+    if not _title_matches(title, hint):
+        seen = (title or "").strip()[:60] or "unknown"
         raise WrongWindow(
-            f"The active window is not {target.title()} (expected the title to contain "
-            f"'{hint}'). Click into the pharmacy system and try again."
+            f"Kroll was not the front window (it was '{seen}'; expected a title containing "
+            f"'{hint}'). Click into Kroll within {int(SETTINGS.wait_for_window)} seconds after pressing Push."
         )
 
 
