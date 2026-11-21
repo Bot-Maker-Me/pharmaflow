@@ -2,7 +2,7 @@
 
 See **helper/README.md** — only two Python files now:
 
-1. `helper/server_agent.py` → run on the Kroll SQL server PC
+1. `helper/flow.py` → run on the Kroll SQL server PC (SQL poller + fax images + cloud sync + learning, all in one file)
 2. `helper/workstation_helper.py` → run on each pharmacist workstation
 
 The Vercel web app is the shared UI. Open the same URL on every PC.

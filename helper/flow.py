@@ -1,51 +1,58 @@
 """
-flow.py — PharmFlow AI local background agent
+flow.py - PharmFlow AI: the ONE program that runs on the pharmacy server PC.
 
-Polls Kroll's PendingNewRx table (READ-ONLY), enriches each row with
-patient / doctor data and syncs structured payloads to the cloud backend.
+Everything the server side needs lives in this file:
+  * Kroll SQL poller (READ-ONLY): PendingNewRx + patient / prescriber / drug / plan details
+  * Fax image reader: Kroll ScriptImage -> compressed JPEG -> cloud OCR (Vercel /api/agent-rx)
+  * Cloud sync: offline spool, heartbeat, shadow comparison, DIN hints
+  * Learning (permanent, see learning.db):
+      1. background  - learns the usual sig per drug / prescriber from finished Rx rows in Kroll SQL
+      2. corrections - when staff change what PharmFlow planned (e.g. a wrong sig), the right value is
+                       remembered and used next time; if staff undo an applied lesson it is dropped
 
-Modes
------
-  python flow.py              run the poll loop (SHADOW or LIVE per config.ini)
-  python flow.py --schema-report  write schema_report.txt (columns only, no PHI)
-  python flow.py --discover   list tables/columns in the Kroll DB so you can
-                              verify / fix the [Schema] mapping in config.ini
-  python flow.py --shadow-report
-                              compare what the agent WOULD have done with what staff actually
-                              entered in Kroll; prints match rates and a go-live verdict
-  python flow.py --skip-backlog
-                              mark every row currently in the pending table as already seen, so only
-                              prescriptions that arrive from now on are processed (start of a clean shadow week)
-  python flow.py --profile TABLE
-                              how many rows / how many non-empty values each column of TABLE has
-                              (no values are shown) - use it to find the right column names
-  python flow.py --test       one connection + one poll, print counts, exit
+Commands
+--------
+  python flow.py                    run the agent (SHADOW or LIVE per config.ini)
+  python flow.py --test             one connection + one poll, then exit
+  python flow.py --gen-key          print a new random agent API key
+  python flow.py --learning-report  show what has been learned so far
+  python flow.py --discover         list tables/columns in the Kroll DB (fix [Schema] mapping)
+  python flow.py --schema-report    write schema_report.txt (columns only, no PHI)
+  python flow.py --find-images      find which table holds the fax images
+  python flow.py --profile TABLE    per-column fill counts (no values)
+  python flow.py --shadow-report    compare what the agent WOULD have done with what staff entered
+  python flow.py --skip-backlog     ignore rows already pending; process only new ones
 
 Design notes
 ------------
-* Only SELECT statements are ever issued.
-* A watermark (highest PendingRxId seen) is kept in SQLite, so the agent never
-  starves when more than TOP-N rows are already processed.
+* Only SELECT statements are ever issued against Kroll.
+* A watermark (highest PendingRxId seen) is kept in SQLite (shadow_queue.db).
 * Patient names / DOBs / addresses are NEVER written to the log file.
-* Cloud pushes are idempotent (server de-duplicates on pending_rx_id+hostname),
-  so retries after a timeout cannot create duplicates.
+* Cloud pushes are idempotent (server de-duplicates on pending_rx_id + store), so retries are safe.
+* Learning never rewrites quantity, refills, drug or DIN - only a sig, only for the same drug, and only
+  after SIG_APPLY_MIN_HITS identical staff fixes (0 = hints only).
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import configparser
 import datetime as dt
 import decimal
+import gzip
+import io
 import json
 import logging
 import logging.handlers
 import re
+import secrets
 import socket
 import sqlite3
 import sys
 import time
 import traceback
+import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -59,6 +66,7 @@ import requests
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.ini"
 SQLITE_PATH = BASE_DIR / "shadow_queue.db"
+LEARN_PATH = BASE_DIR / "learning.db"      # permanent memory: never reset with the queue
 LOG_DIR = BASE_DIR / "logs"
 
 DEFAULT_POLL_INTERVAL = 5
@@ -227,7 +235,19 @@ class AgentConfig:
 
         self.auto_learn: bool = cp.getboolean("Shadow", "AUTO_LEARN", fallback=True)
 
-        # Where Kroll keeps the fax image bytes (kroll_images.py probes common names when blank).
+        # [Learning] two modes, both stored permanently in learning.db (and mirrored to the cloud):
+        #   1. SQL history   - reads finished Rx rows in the background to learn the usual sig per drug / prescriber
+        #   2. staff fixes   - when staff change what PharmFlow planned, remember the right value
+        self.learn_enabled: bool = cp.getboolean("Learning", "ENABLED", fallback=True)
+        # A learned sig correction is applied automatically only after staff made the SAME fix this many times
+        # for the SAME drug. 0 = never rewrite, only show it as a hint.
+        self.sig_apply_min_hits: int = cp.getint("Learning", "SIG_APPLY_MIN_HITS", fallback=2)
+        self.learn_sql_every: int = cp.getint("Learning", "SQL_LEARN_EVERY_SEC", fallback=900)
+        self.learn_backfill_days: int = cp.getint("Learning", "SQL_BACKFILL_DAYS", fallback=365)
+        self.suggest_min_samples: int = cp.getint("Learning", "SUGGEST_MIN_SAMPLES", fallback=5)
+        self.suggest_min_share: float = cp.getfloat("Learning", "SUGGEST_MIN_SHARE", fallback=0.6)
+
+        # Where Kroll keeps the fax image bytes (auto-detected when blank).
         self.image_schema: Dict[str, str] = {"image_table": "", "image_id": "", "image_data": ""}
         if cp.has_section("Schema"):
             for key in self.image_schema:
@@ -596,9 +616,300 @@ def planned_entry(row: Dict[str, Any]) -> Dict[str, Any]:
         "qty": row.get("Qty"),
         "refills": row.get("Refills"),
         "sig": row.get("SigText"),
+        "sig_raw": row.get("_sig_raw", row.get("SigText")),
+        "learned_applied": bool(row.get("_learned_applied")),
         "plan_id": row.get("PrimaryInsurancePlan"),
         "date_created": row.get("DateCreated"),
     }
+
+
+
+# ---------------------------------------------------------------------------
+# Fax image reader (Kroll ScriptImage / ScriptImageContent -> compressed JPEG)
+# ---------------------------------------------------------------------------
+
+img_log = logging.getLogger("pharmflow.images")
+
+IMAGE_TABLE_CANDIDATES = [
+    ("dbo.RxScriptImage", "Id", "ImageData"),
+    ("dbo.RxScriptImage", "ID", "ImageData"),
+    ("dbo.ScriptImage", "Id", "ImageData"),
+    ("dbo.ScriptImage", "ID", "Data"),
+    ("dbo.PendingRxImage", "Id", "ImageData"),
+    ("dbo.Image", "Id", "ImageData"),
+]
+
+
+def _pdf_first_page(raw: bytes):
+    """Kroll sometimes stores the fax as a PDF blob. Needs `pip install pypdfium2` (optional)."""
+    try:
+        import pypdfium2 as pdfium  # type: ignore
+    except ImportError:
+        img_log.warning("Script image is a PDF; install pypdfium2 (pip install pypdfium2) to read it")
+        return None
+    try:
+        pdf = pdfium.PdfDocument(raw)
+        return pdf[0].render(scale=2.2).to_pil()
+    except Exception as exc:
+        img_log.warning("PDF render failed: %s", exc)
+        return None
+
+
+def _try_pil_jpeg(raw: bytes, max_side: int = 1600, quality: int = 72) -> Optional[bytes]:
+    try:
+        from PIL import Image  # type: ignore
+    except ImportError:
+        return None
+    try:
+        if raw[:4] == b"%PDF":
+            img = _pdf_first_page(raw)
+            if img is None:
+                return None
+        else:
+            img = Image.open(io.BytesIO(raw))  # multi-page TIFF: first page
+        img = img.convert("RGB")
+        w, h = img.size
+        scale = min(1.0, max_side / max(w, h))
+        if scale < 1.0:
+            img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=quality, optimize=True)
+        return out.getvalue()
+    except Exception as exc:
+        img_log.warning("PIL compress failed: %s", exc)
+        return None
+
+
+def bytes_to_data_url(raw: bytes, max_b64_chars: int = 2_800_000) -> Optional[str]:
+    if not raw:
+        return None
+    jpeg = _try_pil_jpeg(raw)
+    if jpeg is None:
+        if raw[:3] == b"\xff\xd8\xff":
+            jpeg = raw
+        else:
+            img_log.warning("No PIL and not JPEG — cannot attach ScriptImage (%d bytes)", len(raw))
+            return None
+    b64 = base64.b64encode(jpeg).decode("ascii")
+    if len(b64) > max_b64_chars:
+        jpeg2 = _try_pil_jpeg(raw, max_side=1200, quality=55)
+        if jpeg2:
+            b64 = base64.b64encode(jpeg2).decode("ascii")
+        if len(b64) > max_b64_chars:
+            img_log.warning("ScriptImage still too large after compress (%d b64 chars) — skip", len(b64))
+            return None
+    return f"data:image/jpeg;base64,{b64}"
+
+
+_AUTO: Dict[str, Any] = {"hit": None, "warned": False}
+_MAGIC = (b"\xff\xd8\xff", b"\x89PNG", b"II*\x00", b"MM\x00*", b"%PDF", b"GIF8")
+_GOOD = ("image", "scan", "script", "fax")
+_OK = ("doc", "pic", "attach", "rx")
+_BAD = ("sign", "logo", "photo", "audit", "log", "thumb", "icon", "label", "avatar")
+
+
+def _q(name: str) -> str:
+    return "[" + str(name).replace("]", "]]") + "]"
+
+
+def _score(*names: str) -> int:
+    text = " ".join(names).lower()
+    return 3 * sum(k in text for k in _GOOD) + sum(k in text for k in _OK) - 4 * sum(k in text for k in _BAD)
+
+
+def _looks_like_image(blob: bytes) -> bool:
+    return len(blob) >= 200 and any(blob.startswith(m) for m in _MAGIC)
+
+
+def binary_candidates(conn):
+    """[(score, table, data_col, [id cols])] for every base table with a binary column, best first."""
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT c.TABLE_SCHEMA, c.TABLE_NAME, c.COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS c "
+                    "JOIN INFORMATION_SCHEMA.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME "
+                    "AND t.TABLE_TYPE = 'BASE TABLE' WHERE c.DATA_TYPE IN ('varbinary', 'binary', 'image')")
+        bins = cur.fetchall()
+        out = []
+        for schema, table, col in bins:
+            cur.execute("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? "
+                        "ORDER BY ORDINAL_POSITION", (schema, table))
+            cols = [r[0] for r in cur.fetchall()]
+            upper = {c.upper(): c for c in cols}
+            ids = [upper[k] for k in ("ID", f"{table}ID".upper(), "SCRIPTIMAGEID", "IMAGEID", "DOCUMENTID", "DOCID") if k in upper]
+            if cols and cols[0] not in ids:
+                ids.append(cols[0])
+            out.append((_score(table, col), f"{schema}.{table}", col, ids[:3]))
+        out.sort(key=lambda x: (-x[0], x[1]))
+        return out
+    finally:
+        cur.close()
+
+
+def _probe(conn, table: str, id_col: str, data_col: str, image_id: Any) -> Optional[bytes]:
+    schema, _, name = table.partition(".")
+    cur = conn.cursor()
+    try:
+        cur.execute(f"SELECT TOP 1 {_q(data_col)} FROM {_q(schema)}.{_q(name)} WITH (NOLOCK) WHERE {_q(id_col)} = ?", (image_id,))
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        blob = bytes(row[0].tobytes() if isinstance(row[0], memoryview) else row[0])
+        return blob if _looks_like_image(blob) else None
+    except Exception:
+        return None
+    finally:
+        cur.close()
+
+
+def auto_find(conn, image_id: Any):
+    """Find the table holding this ScriptImageId. Only returns a result when exactly ONE plausible table
+    (name mentions image/scan/script/fax) has it: a wrong guess would attach another patient's image."""
+    hits = []
+    for score, table, data_col, ids in binary_candidates(conn):
+        if score < 3:
+            continue
+        for id_col in ids:
+            blob = _probe(conn, table, id_col, data_col, image_id)
+            if blob:
+                hits.append((table, id_col, data_col, blob))
+                break
+    if len(hits) == 1:
+        return hits[0]
+    if hits and not _AUTO["warned"]:
+        _AUTO["warned"] = True
+        img_log.warning("Several tables hold ScriptImageId=%s (%s): set image_table/image_id/image_data in [Schema]. "
+                    "Run: python flow.py --find-images", image_id, ", ".join(h[0] for h in hits))
+    return None
+
+
+def find_image_source(conn, image_ids):
+    """Diagnostic for `flow.py --find-images`: test real ids against every binary column and report."""
+    print("\nBinary columns in this database (best match first):")
+    cands = binary_candidates(conn)
+    for score, table, col, ids in cands:
+        print(f"  score {score:>2}  {table}.{col}   id columns tried: {', '.join(ids)}")
+    print()
+    found = False
+    for image_id in image_ids:
+        for score, table, data_col, ids in cands:
+            for id_col in ids:
+                blob = _probe(conn, table, id_col, data_col, image_id)
+                if blob:
+                    kind = "JPEG" if blob[:3] == b"\xff\xd8\xff" else "PNG" if blob[:4] == b"\x89PNG" else \
+                        "TIFF" if blob[:2] in (b"II", b"MM") else "PDF" if blob[:4] == b"%PDF" else "image"
+                    print(f"  ScriptImageId {image_id}: FOUND in {table}  id={id_col}  data={data_col}  ({len(blob):,} bytes, {kind}, score {score})")
+                    found = True
+                    break
+    if found:
+        print("\nPut the best match in config.ini under [Schema]:\n  image_table = <table>\n  image_id = <id>\n  image_data = <data>")
+    else:
+        print("  None of the ids matched an image. The fax may be stored under a different key; send me the list above.")
+
+
+def _decode_content(blob: bytes, compression: Any = None) -> bytes:
+    """ScriptImageContent.Content may be compressed (ContentCompressionType). Sniff the real format."""
+    import gzip
+    import zlib
+    if blob[:4] in _MAGIC or blob[:3] == b"\xff\xd8\xff":
+        return blob
+    for fn in (zlib.decompress, gzip.decompress, lambda b: zlib.decompress(b, -15), lambda b: zlib.decompress(b[4:])):
+        try:
+            out = fn(blob)
+            if out[:4] in _MAGIC or out[:3] == b"\xff\xd8\xff":
+                return out
+        except Exception:
+            continue
+    img_log.warning("ScriptImageContent not recognised (compression=%s, first bytes=%s)", compression, blob[:8].hex())
+    return blob
+
+
+def _kroll_native(conn, image_id: Any) -> Optional[bytes]:
+    """Kroll layout: PendingNewRx.ScriptImageId -> dbo.ScriptImage.Id -> ScriptImageContentId -> dbo.ScriptImageContent."""
+    queries = (
+        "SELECT TOP 1 c.Content, c.ContentCompressionType FROM dbo.ScriptImage s WITH (NOLOCK) "
+        "JOIN dbo.ScriptImageContent c WITH (NOLOCK) ON c.ID = s.ScriptImageContentId WHERE s.Id = ?",
+        "SELECT TOP 1 Content, ContentCompressionType FROM dbo.ScriptImageContent WITH (NOLOCK) WHERE ID = ?",
+    )
+    for sql in queries:
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute(sql, (image_id,))
+                row = cur.fetchone()
+            finally:
+                cur.close()
+        except Exception as exc:
+            img_log.debug("Kroll native image query failed: %s", exc)
+            continue
+        if row and row[0] is not None:
+            blob = bytes(row[0])
+            if len(blob) >= 32:
+                out = _decode_content(blob, row[1])
+                img_log.info("Loaded script image id=%s from dbo.ScriptImageContent (%d bytes, compression=%s)",
+                         image_id, len(out), row[1])
+                return out
+    return None
+
+
+def fetch_image_bytes(conn, image_id: Any, schema: Dict[str, str]) -> Optional[bytes]:
+    if image_id is None or image_id == "" or image_id == 0:
+        return None
+    if not (schema.get("image_table") or "").strip():
+        native = _kroll_native(conn, image_id)
+        if native:
+            return native
+    table = (schema.get("image_table") or "").strip()
+    id_col = (schema.get("image_id") or "Id").strip()
+    data_col = (schema.get("image_data") or "ImageData").strip()
+    candidates = []
+    if table:
+        candidates.append((table, id_col, data_col))
+    elif _AUTO["hit"]:
+        candidates.append(_AUTO["hit"])
+    candidates.extend(IMAGE_TABLE_CANDIDATES)
+    cur = conn.cursor()
+    for tbl, ic, dc in candidates:
+        sql = f"SELECT TOP 1 {dc} FROM {tbl} WITH (NOLOCK) WHERE {ic} = ?"
+        try:
+            cur.execute(sql, (image_id,))
+            row = cur.fetchone()
+            if not row or row[0] is None:
+                continue
+            blob = row[0]
+            if isinstance(blob, memoryview):
+                blob = blob.tobytes()
+            elif not isinstance(blob, (bytes, bytearray)):
+                blob = bytes(blob)
+            if len(blob) < 32:
+                continue
+            img_log.info("Loaded script image id=%s from %s (%d bytes)", image_id, tbl, len(blob))
+            return bytes(blob)
+        except Exception as exc:
+            img_log.debug("Image probe %s failed: %s", tbl, exc)
+            continue
+    if not table and not _AUTO["hit"]:
+        found = auto_find(conn, image_id)
+        if found:
+            _AUTO["hit"] = found[:3]
+            img_log.info("Auto-detected the fax image table: %s (id=%s, data=%s). Put these in [Schema] "
+                     "(image_table / image_id / image_data) to make it permanent.", *found[:3])
+            return found[3]
+    img_log.info("No script image bytes for id=%s (table missing or empty)", image_id)
+    return None
+
+
+def attach_page_image(row: Dict[str, Any], conn, schema: Dict[str, str]) -> Dict[str, Any]:
+    image_id = row.get("ScriptImageId") or row.get("script_image_id")
+    raw = fetch_image_bytes(conn, image_id, schema)
+    if not raw:
+        return row
+    url = bytes_to_data_url(raw)
+    if not url:
+        return row
+    out = dict(row)
+    out["page_image_data_url"] = url
+    out["script_image_id"] = image_id
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -887,11 +1198,28 @@ class KrollDB:
         if not row.get("ScriptImageId"):
             return row
         try:
-            import kroll_images  # next to flow_body.py
-            return kroll_images.attach_page_image(row, self.ensure(), self.cfg.image_schema)
+            return attach_page_image(row, self.ensure(), self.cfg.image_schema)
         except Exception as exc:  # image problems must never block the SQL sync
             self.log.warning("Fax image unavailable for PendingRxId=%s: %s", row.get("PendingRxId"), exc)
             return row
+
+    def fetch_rx_history(self, since: dt.datetime, top: int = 500) -> List[Dict[str, Any]]:
+        """Finished Rx rows newer than `since` (read-only) for background learning."""
+        r = self.cfg.rx_schema
+        if not (r["rx_table"] and r["rx_drug_id"] and r["rx_sig"] and r["rx_created"]):
+            return []
+        cols = [("drug", r["rx_drug_id"]), ("sig", r["rx_sig"]), ("created", r["rx_created"]),
+                ("doc", r["rx_doc_id"]), ("qty", r["rx_qty"]), ("refills", r["rx_refills"])]
+        select = ", ".join(f"{c} AS {a}" for a, c in cols if c)
+        cur = self.ensure().cursor()
+        try:
+            cur.execute(f"SELECT TOP {int(top)} {select} FROM {r['rx_table']} WITH (NOLOCK) "
+                        f"WHERE {r['rx_created']} > ? AND {r['rx_sig']} IS NOT NULL ORDER BY {r['rx_created']} ASC",
+                        [since])
+            names = [c[0] for c in cur.description]
+            return [dict(zip(names, row)) for row in cur.fetchall()]
+        finally:
+            cur.close()
 
     def fetch_by_ids(self, ids: List[int]) -> List[Dict[str, Any]]:
         """Re-read specific pending rows (no status filter: a row may have changed status)."""
@@ -1206,6 +1534,318 @@ def build_payload(row: Dict[str, Any], cfg: AgentConfig) -> Dict[str, Any]:
     }
 
 
+
+# ---------------------------------------------------------------------------
+# Learning: permanent memory (learning.db). Nothing here is ever deleted automatically.
+# ---------------------------------------------------------------------------
+
+def norm_sig(value: Any) -> str:
+    return " ".join(str(value or "").upper().replace(";", " ").split()).rstrip(".")
+
+
+class Learner:
+    """Two learning modes sharing one permanent store.
+
+    Mode 1  learn_from_sql   background: reads finished Rx rows from Kroll and counts which sig each drug
+                              (and each prescriber + drug) is normally given. Used only to SUGGEST a sig when a
+                              pending Rx has none - never to overwrite one.
+    Mode 2  learn_from_staff when staff change what PharmFlow planned, the fix is stored as a rule
+                              (drug + wrong sig -> right sig). After SIG_APPLY_MIN_HITS identical fixes for the same
+                              drug the rule is applied automatically next time. If staff then undo it, the rule is
+                              dropped / replaced, so a wrong lesson corrects itself.
+    Quantity / refill / drug changes are recorded in full history (corrections) and never auto-applied.
+    """
+
+    def __init__(self, cfg: AgentConfig, path: Path, logger: logging.Logger):
+        self.cfg = cfg
+        self.path = path
+        self.log = logger
+        self._warned = False
+        self._backlog = False
+        self._init()
+
+    def _conn(self) -> sqlite3.Connection:
+        c = sqlite3.connect(str(self.path), timeout=30)
+        c.row_factory = sqlite3.Row
+        return c
+
+    def _init(self) -> None:
+        c = self._conn()
+        try:
+            c.executescript("""
+                CREATE TABLE IF NOT EXISTS corrections (      -- full history, one row per field staff changed
+                    pending_rx_id INTEGER NOT NULL,
+                    field         TEXT NOT NULL,
+                    drug_id       TEXT,
+                    doc_id        TEXT,
+                    original      TEXT,
+                    corrected     TEXT,
+                    created_at    TEXT NOT NULL,
+                    PRIMARY KEY (pending_rx_id, field)
+                );
+                CREATE TABLE IF NOT EXISTS rules (            -- sig_fix (drug-specific) | sig_fix_any (hint only)
+                    kind       TEXT NOT NULL,
+                    key        TEXT NOT NULL,
+                    target     TEXT NOT NULL,
+                    hits       INTEGER NOT NULL DEFAULT 1,
+                    last_seen  TEXT NOT NULL,
+                    PRIMARY KEY (kind, key)
+                );
+                CREATE TABLE IF NOT EXISTS usage (            -- mode 1: what the pharmacy normally writes
+                    drug_id  TEXT NOT NULL,
+                    doc_id   TEXT NOT NULL,
+                    sig_norm TEXT NOT NULL,
+                    sig_raw  TEXT NOT NULL,
+                    n        INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (drug_id, doc_id, sig_norm)
+                );
+                CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            """)
+            c.commit()
+        finally:
+            c.close()
+
+    def _meta(self, key: str, default: str = "") -> str:
+        c = self._conn()
+        try:
+            r = c.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            return r["value"] if r else default
+        finally:
+            c.close()
+
+    def _set_meta(self, key: str, value: str) -> None:
+        c = self._conn()
+        try:
+            c.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+            c.commit()
+        finally:
+            c.close()
+
+    # ---- rules -------------------------------------------------------------------------------
+    def _get_rule(self, kind: str, key: str) -> Optional[sqlite3.Row]:
+        c = self._conn()
+        try:
+            return c.execute("SELECT target, hits FROM rules WHERE kind=? AND key=?", (kind, key)).fetchone()
+        finally:
+            c.close()
+
+    def _bump_rule(self, kind: str, key: str, target: str, hits: Optional[int] = None) -> None:
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        c = self._conn()
+        try:
+            row = c.execute("SELECT target, hits FROM rules WHERE kind=? AND key=?", (kind, key)).fetchone()
+            if row is None:
+                c.execute("INSERT INTO rules(kind,key,target,hits,last_seen) VALUES(?,?,?,?,?)",
+                          (kind, key, target, hits or 1, now))
+            else:
+                same = norm_sig(row["target"]) == norm_sig(target)
+                new_hits = (hits if hits is not None else row["hits"] + 1) if same else (hits or 1)  # different fix: latest wins
+                c.execute("UPDATE rules SET target=?, hits=?, last_seen=? WHERE kind=? AND key=?",
+                          (target, new_hits, now, kind, key))
+            c.commit()
+        finally:
+            c.close()
+
+    def _drop_rule(self, kind: str, key: str) -> None:
+        c = self._conn()
+        try:
+            c.execute("DELETE FROM rules WHERE kind=? AND key=?", (kind, key))
+            c.commit()
+        finally:
+            c.close()
+
+    @staticmethod
+    def _keys(drug_id: Any, raw_sig: Any) -> List[Tuple[str, str]]:
+        nr = norm_sig(raw_sig)
+        keys = [("sig_fix_any", nr)]
+        if drug_id not in (None, ""):
+            keys.insert(0, ("sig_fix", f"{drug_id}|{nr}"))
+        return keys
+
+    def _record(self, pending_id: int, field: str, drug_id: Any, doc_id: Any, original: Any, corrected: Any) -> None:
+        c = self._conn()
+        try:
+            c.execute("INSERT OR REPLACE INTO corrections VALUES (?,?,?,?,?,?,?)",
+                      (pending_id, field, None if drug_id is None else str(drug_id), None if doc_id is None else str(doc_id),
+                       "" if original is None else str(original), "" if corrected is None else str(corrected),
+                       dt.datetime.now(dt.timezone.utc).isoformat()))
+            c.commit()
+        finally:
+            c.close()
+
+    # ---- mode 2: learn from what staff changed after PharmFlow's entry ------------------------
+    def learn_from_staff(self, planned: Dict[str, Any], actual: Dict[str, Any]) -> int:
+        pid = int(planned.get("pending_rx_id") or 0)
+        drug, doc = planned.get("drug_id"), planned.get("doc_id")
+        learned = 0
+
+        raw = planned.get("sig_raw", planned.get("sig"))
+        planned_sig = planned.get("sig")
+        applied = bool(planned.get("learned_applied"))
+        final = actual.get("rx_sig")
+        if final not in (None, "") and norm_sig(raw):
+            a, nraw = norm_sig(final), norm_sig(raw)
+            keys = self._keys(drug, raw)
+            if a == nraw:
+                if applied:                      # we rewrote it, staff put the original back: the lesson was wrong
+                    for kind, key in keys:
+                        self._drop_rule(kind, key)
+                    self._record(pid, "sig", drug, doc, planned_sig, final)
+                    self.log.info("Learning: staff reverted an applied sig rule for PendingRxId=%s - rule removed", pid)
+                    learned += 1
+            elif applied and a == norm_sig(planned_sig):
+                for kind, key in keys:           # staff accepted what we applied: confirm it
+                    self._bump_rule(kind, key, str(final))
+            else:
+                self._record(pid, "sig", drug, doc, raw, final)
+                for kind, key in keys:
+                    self._bump_rule(kind, key, str(final))
+                learned += 1
+
+        for field, pcol, acol in (("qty", "qty", "rx_qty"), ("refills", "refills", "rx_refills"), ("drug_id", "drug_id", "rx_drug_id")):
+            if actual.get(acol) in (None, ""):
+                continue
+            if _norm(field, planned.get(pcol)) != _norm(field, actual.get(acol)):
+                self._record(pid, field, drug, doc, planned.get(pcol), actual.get(acol))
+                learned += 1
+        return learned
+
+    # ---- applying what was learned to a new pending row -----------------------------------------
+    def apply(self, row: Dict[str, Any]) -> None:
+        sig = row.get("SigText")
+        row["_sig_raw"] = sig
+        learned: Dict[str, Any] = {}
+        drug = row.get("DrugId")
+        if str(sig or "").strip():
+            for kind, key in self._keys(drug, sig):
+                rule = self._get_rule(kind, key)
+                if not rule or norm_sig(rule["target"]) == norm_sig(sig):
+                    continue
+                info = {"from": str(sig), "to": rule["target"], "hits": rule["hits"]}
+                if kind == "sig_fix" and self.cfg.sig_apply_min_hits > 0 and rule["hits"] >= self.cfg.sig_apply_min_hits:
+                    row["SigText"] = rule["target"]
+                    row["_learned_applied"] = True
+                    learned["sig_applied"] = info
+                else:
+                    learned["sig_hint"] = info
+                break
+        else:
+            sug = self.suggest_sig(drug, row.get("DocId"))
+            if sug:
+                learned["suggested_sig"] = sug
+        if learned:
+            row["_learned"] = learned
+
+    # ---- mode 1: learn from finished prescriptions in Kroll SQL ------------------------------------
+    def learn_from_sql(self, db: "KrollDB") -> None:
+        r = self.cfg.rx_schema
+        if not (r["rx_table"] and r["rx_drug_id"] and r["rx_sig"] and r["rx_created"]):
+            if not self._warned:
+                self._warned = True
+                self.log.info("SQL learning off: set rx_table, rx_drug_id, rx_sig and rx_created in [RxSchema]")
+            return
+        wm_text = self._meta("sql_wm")
+        wm = dt.datetime.fromisoformat(wm_text) if wm_text else dt.datetime.now() - dt.timedelta(days=self.cfg.learn_backfill_days)
+        seen = 0
+        for _ in range(20):                       # up to 10k rows per cycle, then continue next cycle
+            rows = db.fetch_rx_history(wm, 500)
+            if not rows:
+                self._backlog = False
+                break
+            c = self._conn()
+            try:
+                for x in rows:
+                    ns = norm_sig(x.get("sig"))
+                    created = x.get("created")
+                    if isinstance(created, dt.datetime) and created > wm:
+                        wm = created
+                    if not ns or x.get("drug") in (None, ""):
+                        continue
+                    c.execute("""INSERT INTO usage(drug_id,doc_id,sig_norm,sig_raw,n) VALUES(?,?,?,?,1)
+                                 ON CONFLICT(drug_id,doc_id,sig_norm) DO UPDATE SET n=n+1, sig_raw=excluded.sig_raw""",
+                              (str(x["drug"]), str(x.get("doc") or ""), ns, str(x["sig"]).strip()))
+                    seen += 1
+                c.commit()
+            finally:
+                c.close()
+            self._set_meta("sql_wm", wm.isoformat())
+            self._backlog = len(rows) >= 500
+            if len(rows) < 500:
+                break
+        if seen:
+            self.log.info("SQL learning: absorbed %d finished prescription(s)", seen)
+
+    def suggest_sig(self, drug_id: Any, doc_id: Any) -> Optional[Dict[str, Any]]:
+        if drug_id in (None, ""):
+            return None
+        c = self._conn()
+        try:
+            scopes = ([("prescriber", "AND doc_id=?", (str(drug_id), str(doc_id)))] if doc_id not in (None, "") else []) + \
+                     [("drug", "", (str(drug_id),))]
+            for scope, extra, params in scopes:
+                rows = c.execute(f"SELECT sig_raw, SUM(n) AS n FROM usage WHERE drug_id=? {extra} "
+                                 "GROUP BY sig_norm ORDER BY n DESC LIMIT 2", params).fetchall()
+                total = sum(int(x["n"]) for x in c.execute(f"SELECT n FROM usage WHERE drug_id=? {extra}", params).fetchall())
+                if rows and total >= self.cfg.suggest_min_samples and rows[0]["n"] / total >= self.cfg.suggest_min_share:
+                    return {"sig": rows[0]["sig_raw"], "scope": scope, "samples": total, "share": round(rows[0]["n"] / total, 2)}
+        finally:
+            c.close()
+        return None
+
+    # ---- restore from the cloud copy (e.g. after reinstalling this PC) ------------------------------
+    def restore_from_cloud(self, cloud: "CloudClient") -> None:
+        if self._meta("cloud_restored"):
+            return
+        c = self._conn()
+        try:
+            has_rules = c.execute("SELECT 1 FROM rules LIMIT 1").fetchone() is not None
+        finally:
+            c.close()
+        if has_rules:
+            self._set_meta("cloud_restored", "1")
+            return
+        try:
+            resp = cloud.session.get(cloud._sibling("learn"), params={"store_id": self.cfg.store_id, "limit": 200},
+                                     timeout=CLOUD_TIMEOUT_SEC)
+            if resp.status_code != 200:
+                return
+            n = 0
+            for m in resp.json().get("mappings", []):
+                if m.get("kind") == "text_replace" and str(m.get("source_key", "")).startswith("medications[0].sig::"):
+                    self._bump_rule("sig_fix_any", norm_sig(m["source_key"].split("::", 1)[1]), m["target_value"],
+                                    hits=int(m.get("hit_count") or 1))
+                    n += 1
+            self._set_meta("cloud_restored", "1")
+            if n:
+                self.log.info("Learning restored from the cloud copy: %d sig rule(s)", n)
+        except Exception as exc:
+            self.log.debug("Cloud learning restore skipped: %s", exc)
+
+    def report(self) -> str:
+        c = self._conn()
+        try:
+            one = lambda q: c.execute(q).fetchone()[0]
+            n_corr = one("SELECT COUNT(*) FROM corrections")
+            n_fix = one("SELECT COUNT(*) FROM rules WHERE kind='sig_fix'")
+            n_any = one("SELECT COUNT(*) FROM rules WHERE kind='sig_fix_any'")
+            n_rx = one("SELECT COALESCE(SUM(n),0) FROM usage")
+            n_drugs = one("SELECT COUNT(DISTINCT drug_id) FROM usage")
+            lines = [
+                f"PharmFlow learning report | {self.path.name}",
+                f"  corrections remembered   : {n_corr}",
+                f"  sig rules (drug-specific): {n_fix}",
+                f"  sig rules (hint only)    : {n_any}",
+                f"  finished Rx absorbed     : {n_rx} ({n_drugs} drugs)",
+                f"  auto-apply after {self.cfg.sig_apply_min_hits} identical fixes "
+                f"({'OFF - hints only' if self.cfg.sig_apply_min_hits <= 0 else 'on'})",
+                "", "Strongest sig rules (drug id | wrong sig -> right sig):",
+            ]
+            for r in c.execute("SELECT key, target, hits FROM rules WHERE kind='sig_fix' ORDER BY hits DESC LIMIT 15"):
+                lines.append(f"  x{r['hits']}  {r['key']}  ->  {r['target']}")
+            return "\n".join(lines) + "\n"
+        finally:
+            c.close()
+
 # ---------------------------------------------------------------------------
 # Main agent
 # ---------------------------------------------------------------------------
@@ -1217,6 +1857,8 @@ class PharmFlowAgent:
         self.store = LocalStore(SQLITE_PATH, self.log)
         self.db = KrollDB(cfg, self.log)
         self.cloud = CloudClient(cfg, self.log)
+        self.learner: Optional[Learner] = Learner(cfg, LEARN_PATH, self.log) if cfg.learn_enabled else None
+        self._last_learn = -cfg.learn_sql_every
         self._last_heartbeat = 0.0
         self._last_compare = -COMPARE_EVERY_SEC
         self._last_recheck = -RECHECK_EVERY_SEC
@@ -1235,6 +1877,12 @@ class PharmFlowAgent:
         if self.store.is_processed(pending_id):
             return
 
+        if self.learner:
+            try:
+                self.learner.apply(row)       # fixes the agent learned from staff earlier (never blocks the sync)
+            except Exception as exc:
+                self.log.warning("Learning apply skipped for PendingRxId=%s: %s", pending_id, exc)
+
         issues = validate_row(row, self.cfg.require_plan)
         self.store.record_decision(
             pending_id, "EXCEPTION" if issues else "AUTO", issues, planned_entry(row)
@@ -1252,6 +1900,8 @@ class PharmFlowAgent:
             return
 
         payload = build_payload(row, self.cfg)
+        if row.get("_learned"):
+            payload["learning"] = row["_learned"]
         payload["decision"] = {
             "action": "EXCEPTION" if issues else "AUTO",
             "issues": issues,
@@ -1341,7 +1991,7 @@ class PharmFlowAgent:
     def _compare_with_staff(self) -> None:
         """SHADOW: look up what staff actually entered in Kroll and report the match to the cloud."""
         r = self.cfg.rx_schema
-        if not self.cfg.cloud_enabled or not r["rx_table"]:
+        if not r["rx_table"] or not (self.cfg.cloud_enabled or self.learner):
             return
         if time.monotonic() - self._last_compare < COMPARE_EVERY_SEC:
             return
@@ -1363,31 +2013,44 @@ class PharmFlowAgent:
             age = now - dt.datetime.fromisoformat(d["decided_at"])
             if not actual and age < dt.timedelta(days=COMPARE_GIVE_UP_DAYS):
                 continue                                 # staff have not entered it yet
-            result = {
-                "type": "shadow_result",
-                "store_id": self.cfg.store_id,
-                "pending_rx_id": d["pending_rx_id"],
-                "actual": actual or None,
-                "field_match": field_matches(planned, actual, r) if actual else None,
-            }
-            ok, err, _ = self.cloud.push(result)
-            if not ok:
-                self.log.warning("Could not upload comparison for PendingRxId=%s: %s", d["pending_rx_id"], err)
-                return
-            if self.cfg.auto_learn and actual and result["field_match"]:
+            if actual and self.learner:
                 try:
-                    import shadow_learn
-                    fixes = shadow_learn.staff_corrections(planned, actual, r, result["field_match"])
+                    fixes = self.learner.learn_from_staff(planned, actual)
                     if fixes:
-                        self.cloud.push_learn({
-                            "store_id": self.cfg.store_id,
-                            "source": "shadow_staff",
-                            "corrections": [dict(f, pending_rx_id=d["pending_rx_id"]) for f in fixes],
-                        })
-                        self.log.info("Learned %d staff correction(s) for PendingRxId=%s", len(fixes), d["pending_rx_id"])
+                        self.log.info("Learned %d staff correction(s) for PendingRxId=%s", fixes, d["pending_rx_id"])
                 except Exception as exc:
-                    self.log.warning("Auto-learn skipped: %s", exc)
+                    self.log.warning("Learning from staff skipped for PendingRxId=%s: %s", d["pending_rx_id"], exc)
+            if self.cfg.cloud_enabled:
+                # the cloud keeps its own copy of the corrections (extraction_feedback / learned_mappings)
+                result = {
+                    "type": "shadow_result",
+                    "store_id": self.cfg.store_id,
+                    "pending_rx_id": d["pending_rx_id"],
+                    "actual": actual or None,
+                    "field_match": field_matches(planned, actual, r) if actual else None,
+                }
+                ok, err, _ = self.cloud.push(result)
+                if not ok:
+                    self.log.warning("Could not upload comparison for PendingRxId=%s: %s", d["pending_rx_id"], err)
+                    return
             self.store.mark_compared(d["pending_rx_id"])
+
+    def _learn_background(self) -> None:
+        """Mode 1: quietly absorb finished prescriptions from Kroll SQL (read-only)."""
+        if not self.learner:
+            return
+        gap = 5 if self.learner._backlog else self.cfg.learn_sql_every
+        if time.monotonic() - self._last_learn < gap:
+            return
+        self._last_learn = time.monotonic()
+        try:
+            self.learner.learn_from_sql(self.db)
+            if self.cfg.cloud_enabled:
+                self.learner.restore_from_cloud(self.cloud)
+        except pyodbc.Error as exc:
+            self.log.warning("SQL learning paused (database): %s", exc)
+        except Exception as exc:
+            self.log.warning("SQL learning skipped: %s", exc)
 
     def _heartbeat(self) -> None:
         if not self.cfg.cloud_enabled or time.monotonic() - self._last_heartbeat < HEARTBEAT_EVERY_SEC:
@@ -1462,6 +2125,7 @@ class PharmFlowAgent:
             self._recheck_incomplete()
             self._flush_spool()
             self._compare_with_staff()
+            self._learn_background()
             self._heartbeat()
             return len(rows)
         except pyodbc.Error as exc:
@@ -1607,8 +2271,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="write schema_report.txt (columns of your Kroll tables, no data) and exit")
     parser.add_argument("--find-images", action="store_true",
                         help="find which table holds the fax images for recent pending Rx and exit")
+    parser.add_argument("--gen-key", action="store_true",
+                        help="print a new random agent API key (put it in config.ini [Cloud] API_KEY and Vercel AGENT_API_KEY)")
+    parser.add_argument("--learning-report", action="store_true",
+                        help="show what the agent has learned so far (no patient data) and exit")
     parser.add_argument("--test", action="store_true", help="connect, poll once, print counts, exit")
     args = parser.parse_args(argv)
+
+    if args.gen_key:
+        print(secrets.token_urlsafe(32))
+        return 0
 
     try:
         cfg = AgentConfig(CONFIG_PATH)
@@ -1629,6 +2301,10 @@ def main(argv: Optional[List[str]] = None) -> int:
               "'Start shadow week' on the Live dashboard).")
         return 0
 
+    if args.learning_report:
+        print(Learner(cfg, LEARN_PATH, setup_logging(cfg.agent_version)).report())
+        return 0
+
     if args.shadow_report:
         return shadow_report(cfg, BASE_DIR / "shadow_report.txt")
 
@@ -1645,7 +2321,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.find_images:
         logger = setup_logging(cfg.agent_version)
         db = KrollDB(cfg, logger)
-        import kroll_images
         sc = cfg.schema
         col = sc.get("pending_script_image_id") or "ScriptImageId"
         conn = db.ensure()
@@ -1664,7 +2339,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"No pending prescriptions have a {col} yet. Receive a fax in Kroll first, then run this again.")
             return 1
         print(f"Testing recent {col} values: {ids}")
-        kroll_images.find_image_source(conn, ids)
+        find_image_source(conn, ids)
         return 0
 
     agent = PharmFlowAgent(cfg)

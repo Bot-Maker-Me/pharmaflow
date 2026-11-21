@@ -15,6 +15,7 @@ helper/config.ini
 
 # local agent state
 helper/shadow_queue.db
+helper/learning.db
 helper/logs/
 helper/.venv/
 

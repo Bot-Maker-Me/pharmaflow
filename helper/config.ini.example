@@ -27,10 +27,10 @@ TRUST_SERVER_CERTIFICATE = true
 [Cloud]
 ; Your Vercel app URL + the AGENT_API_KEY you set in Vercel env vars
 API_URL = https://pharmaflow-swart.vercel.app/api/sync-queue
-API_KEY = CHANGE_ME_long_random_token
+API_KEY = CHANGE_ME_long_random_token   ; create one with: python flow.py --gen-key
 
 ; ---------------------------------------------------------------------
-; Schema mapping — run:  python server_agent.py --discover
+; Schema mapping — run:  python flow.py --discover
 ; Then override any names that differ on this pharmacy's Kroll install.
 ; ---------------------------------------------------------------------
 [Schema]
@@ -94,3 +94,15 @@ GO_LIVE_MIN_MATCH = 0.995
 GO_LIVE_MIN_SAMPLES = 200
 GO_LIVE_MIN_AUTO_RATE = 0.80
 AUTO_LEARN = true
+
+[Learning]
+; Permanent memory in learning.db. Needs [RxSchema] filled in (finished prescriptions are the teacher).
+ENABLED = true
+; Apply a learned sig fix automatically after staff made the SAME fix this many times for the SAME drug.
+; 0 = never rewrite, only show hints.
+SIG_APPLY_MIN_HITS = 2
+SQL_LEARN_EVERY_SEC = 900
+SQL_BACKFILL_DAYS = 365
+; Suggest a sig for a blank one only when it is the clear favourite for that drug / prescriber.
+SUGGEST_MIN_SAMPLES = 5
+SUGGEST_MIN_SHARE = 0.6

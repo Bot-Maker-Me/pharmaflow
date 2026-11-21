@@ -1,5 +1,5 @@
 <#
- Installs server_agent.py as a background Windows task that:
+ Installs flow.py as a background Windows task that:
    - starts at boot (no one has to log in), keeps running when terminals are closed
    - restarts itself within a minute if it crashes
    - runs hidden, as SYSTEM
@@ -20,13 +20,13 @@ if (-not (Test-Path $cfg)) { throw "Missing config.ini - copy config.ini.example
 
 Write-Host "Testing the configuration before installing..."
 Push-Location $dir
-& $py server_agent.py --test
-if ($LASTEXITCODE -ne 0) { Pop-Location; throw "server_agent.py --test failed - fix config.ini first." }
+& $py flow.py --test
+if ($LASTEXITCODE -ne 0) { Pop-Location; throw "flow.py --test failed - fix config.ini first." }
 Pop-Location
 
 icacls $cfg /inheritance:r /grant:r "SYSTEM:(F)" "BUILTIN\Administrators:(F)" | Out-Null
 
-$action    = New-ScheduledTaskAction -Execute $py -Argument "server_agent.py" -WorkingDirectory $dir
+$action    = New-ScheduledTaskAction -Execute $py -Argument "flow.py" -WorkingDirectory $dir
 $trigger   = New-ScheduledTaskTrigger -AtStartup
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
@@ -36,7 +36,7 @@ $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGo
 
 Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
 Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
-  -Description "PharmFlow Kroll poller (server_agent.py)" | Out-Null
+  -Description "PharmFlow Kroll poller (flow.py)" | Out-Null
 Start-ScheduledTask -TaskName $name
 
 powercfg /change standby-timeout-ac 0 | Out-Null

@@ -4,12 +4,10 @@ You only need to run **two** programs.
 
 | File you run | Where | What it does |
 |--------------|-------|--------------|
-| **`server_agent.py`** | **One** pharmacy server PC (can reach Kroll SQL) | Polls for new faxes → AI OCR → cloud queue |
+| **`flow.py`** | **One** pharmacy server PC (can reach Kroll SQL) | Polls Kroll SQL, reads fax images → AI OCR → cloud queue, and keeps learning (see below) |
 | **`workstation_helper.py`** | **Every** pharmacist PC | Types verified Rx into the focused Kroll window |
 
-Internal support files (do **not** run these yourself):
-- `flow_body.py` — full poller logic (loaded by server_agent.py)
-- `kroll_images.py` — fax image reader (used by the poller)
+`flow.py` is self-contained: SQL poller, fax image reader, cloud sync and learning live in that one file.
 
 The **Vercel web app** is the shared UI. Open the same URL on any PC.
 Staff review the queue there and click **Push**. The workstation helper only
@@ -29,9 +27,9 @@ notepad config.ini          # fill [Database] and [Cloud]
 ```
 
 ```powershell
-python server_agent.py --test          # must print TEST OK
-python server_agent.py --discover      # check real column names
-python server_agent.py                 # start (leave MODE=SHADOW first)
+python flow.py --test          # must print TEST OK
+python flow.py --discover      # check real column names
+python flow.py                 # start (leave MODE=SHADOW first)
 ```
 
 To keep it running after reboot:
@@ -66,7 +64,28 @@ No install needed for the UI itself. Only the workstation helper is local.
 
 ## Safety rules
 
-- `server_agent.py` only runs `SELECT` queries. It never writes to Kroll.
+- `flow.py` only runs `SELECT` queries. It never writes to Kroll.
 - Start in `MODE = SHADOW` for a week. Compare with `--shadow-report` before going `LIVE`.
 - `workstation_helper.py` only types when the Kroll window is focused.
 - Get written permission from the pharmacy owner before connecting to the live database.
+
+
+---
+
+## Learning (flow.py)
+
+Everything learned is stored permanently in `helper/learning.db` (never reset with the queue, so back it up
+with the rest of the folder) and mirrored to the cloud.
+
+1. **Background, from SQL** - every 15 min flow.py reads finished prescriptions from Kroll (read-only, needs
+   `[RxSchema]`) and learns the usual sig per drug and per prescriber. When a pending Rx arrives with no sig, it is
+   sent to the web app with a *suggested sig* (never filled in silently).
+2. **From staff corrections** - after an Rx is entered in Kroll, flow.py compares it with what PharmFlow planned.
+   If staff changed the sig, the right sig is remembered for that drug. After `SIG_APPLY_MIN_HITS` (default 2)
+   identical fixes it is applied automatically next time; if staff undo it, the rule is removed. Quantity, refills
+   and drug changes are recorded but never auto-applied.
+
+```powershell
+python flow.py --learning-report     # what has been learned so far
+python flow.py --gen-key             # new random agent API key
+```
