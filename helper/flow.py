@@ -2459,6 +2459,50 @@ def shadow_report(cfg: AgentConfig, out_path: Path) -> int:
     return 0 if verdict_ok else 3
 
 
+def fetch_inbound_faxes(conn, after_mail_id: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
+    """Inbound fax list (Kroll "Inbound Docs"): dbo.Mail rows with MessageType 19 from the fax service (SRFax),
+    each with its image in dbo.MailAttachment -> MailAttachmentContent. SELECT only, newest first."""
+    sql = (
+        "SELECT TOP (?) m.Id, m.DateCreated, m.MailFrom, a.Id, a.MailAttachmentContentId, a.ContentMimeType "
+        "FROM dbo.Mail m WITH (NOLOCK) JOIN dbo.MailAttachment a WITH (NOLOCK) ON a.MailId = m.Id "
+        "WHERE m.MessageType = 19 AND m.MessageId LIKE 'SRFax.%' AND m.Id > ? ORDER BY m.Id DESC"
+    )
+    cur = conn.cursor()
+    try:
+        cur.execute(sql, (int(limit), int(after_mail_id)))
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+    return [{"mail_id": r[0], "received": r[1], "from": (r[2] or ""), "attachment_id": r[3],
+             "content_id": r[4], "mime": r[5]} for r in rows]
+
+
+def load_mail_attachment_bytes(conn, content_id: Any) -> Optional[bytes]:
+    """Image bytes of one inbound fax from dbo.MailAttachmentContent (the binary column is found by itself)."""
+    if not content_id:
+        return None
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT TOP 1 * FROM dbo.MailAttachmentContent WITH (NOLOCK) WHERE Id = ?", (content_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [c[0] for c in cur.description]
+    finally:
+        cur.close()
+    best, comp = None, None
+    for name, val in zip(cols, row):
+        if isinstance(val, (bytes, bytearray, memoryview)):
+            b = bytes(val)
+            if best is None or len(b) > len(best):
+                best = b
+        elif "compression" in name.lower():
+            comp = val
+    if best is None or len(best) < 32:
+        return None
+    return _decode_content(best, comp)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="PharmFlow Kroll poller")
     parser.add_argument("--discover", action="store_true", help="list DB tables/columns and exit")
@@ -2477,6 +2521,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="retry payloads that were parked after failed uploads (PendingRxId >= FROM_ID), then exit")
     parser.add_argument("--learning-report", action="store_true",
                         help="show what the agent has learned so far (no patient data) and exit")
+    parser.add_argument("--inbound-test", type=int, nargs="?", const=10, metavar="N",
+                        help="list the newest N inbound faxes (Kroll Inbound Docs) and check their images load, then exit")
     parser.add_argument("--test", action="store_true", help="connect, poll once, print counts, exit")
     args = parser.parse_args(argv)
 
@@ -2489,6 +2535,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:
         print(f"FATAL config error: {exc}", file=sys.stderr)
         return 1
+
+    if args.inbound_test:
+        logger = setup_logging(cfg.agent_version)
+        conn = KrollDB(cfg, logger).ensure()
+        for f in fetch_inbound_faxes(conn, 0, args.inbound_test):
+            raw = load_mail_attachment_bytes(conn, f["content_id"])
+            kind = "no image"
+            if raw:
+                kind = ("TIFF" if raw[:4] in (b"II*\x00", b"MM\x00*") else "PDF" if raw[:4] == b"%PDF"
+                        else "PNG" if raw[:4] == b"\x89PNG" else "JPEG" if raw[:3] == b"\xff\xd8\xff" else raw[:4].hex())
+                kind += f" {len(raw):,} bytes"
+            print(f"Mail {f['mail_id']} | {f['received']} | {f['from'][:40]} | {kind}")
+        return 0
 
     if args.profile:
         logger = setup_logging(cfg.agent_version)
