@@ -156,6 +156,41 @@ export class LocalHelperClient {
     };
   }
 
+  /** Guided entry: POST one small step to the helper. */
+  async sendStep(
+    helperUrl: string,
+    payload: HelperPayload,
+    helperToken = "",
+  ): Promise<{ ok: boolean; message: string }> {
+    const base = normaliseBase(helperUrl);
+    try {
+      const response = await fetchWithTimeout(
+        `${base}/autofill`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(helperToken ? { "x-helper-token": helperToken } : {}),
+          },
+          body: JSON.stringify(payload),
+        },
+        POST_TIMEOUT_MS,
+      );
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      if (!response.ok) return { ok: false, message: body?.message ?? `Helper returned HTTP ${response.status}` };
+      return { ok: true, message: body?.message ?? "Done" };
+    } catch (error) {
+      this.setStatus("offline");
+      return {
+        ok: false,
+        message:
+          error instanceof Error && error.name === "AbortError"
+            ? "Timed out - is Kroll responding?"
+            : `Could not reach the helper at ${base}.`,
+      };
+    }
+  }
+
   /** POST one `/autofill` call per medication. Returns an error message or null. */
   private async postAll(
     base: string,

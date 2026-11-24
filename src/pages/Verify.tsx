@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, CheckCheck, FileWarning, Send, Sparkles } from "
 import { useNavigate, useParams } from "react-router-dom";
 
 import { DocumentViewer, type ViewerOverlay } from "@/components/DocumentViewer";
+import { KrollGuidedDialog } from "@/components/KrollGuidedDialog";
 import { PushDialog } from "@/components/PushDialog";
 import { ScoreChip } from "@/components/Confidence";
 import { ScriptWorkspace } from "@/components/ScriptWorkspace";
@@ -276,14 +277,25 @@ export default function Verify() {
         </div>
       </div>
 
-      <PushDialog
-        open={pushOpen}
-        onOpenChange={handlePushDialogChange}
-        script={active}
-        onFinished={() => {
-          pushCompletedRef.current = true;
-        }}
-      />
+      {settings.pms === "kroll" ? (
+        <KrollGuidedDialog
+          open={pushOpen}
+          onOpenChange={handlePushDialogChange}
+          script={active}
+          onFinished={() => {
+            pushCompletedRef.current = true;
+          }}
+        />
+      ) : (
+        <PushDialog
+          open={pushOpen}
+          onOpenChange={handlePushDialogChange}
+          script={active}
+          onFinished={() => {
+            pushCompletedRef.current = true;
+          }}
+        />
+      )}
     </div>
   );
 }

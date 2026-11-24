@@ -14,6 +14,7 @@ import { countPdfPages } from "@/services/pdf";
 import { requestExtraction } from "@/services/vision";
 import { isTiffFile, tiffToPageUrls } from "@/services/tiff";
 import type { KeystrokeStep } from "@/lib/pms";
+import { buildStepPayload, type KrollStep } from "@/lib/payload";
 import {
   DEFAULT_SETTINGS,
   type DinCandidate,
@@ -99,6 +100,8 @@ interface AppStoreValue {
     scriptId: string,
     onStep: (step: KeystrokeStep, index: number, total: number) => void,
   ) => Promise<PushOutcome>;
+  sendKrollStep: (scriptId: string, step: KrollStep) => Promise<{ ok: boolean; message: string }>;
+  completeKrollPush: (scriptId: string) => void;
   createManualScript: (input: ManualScriptInput) => string;
   checkHelper: () => Promise<void>;
   resetQueue: () => void;
@@ -445,6 +448,61 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  /** Tell the cloud this fax was really entered into Kroll (fax leaves the to-do list; agent can learn from staff edits). */
+  const reportPushed = React.useCallback((script: Script) => {
+    if (!script.faxMailId) return;
+    const med = script.medications[0];
+    const base = settingsRef.current.apiBaseUrl.replace(/\/$/, "");
+    void fetch(`${base}/api/queue`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "x-access-token": settingsRef.current.apiToken },
+      body: JSON.stringify({
+        kind: "fax",
+        action: "pushed",
+        store_id: script.faxStoreId || "default",
+        mail_id: script.faxMailId,
+        pushed: {
+          patient: script.patient.full_name,
+          dob: script.patient.dob,
+          prescriber: script.prescriber.name,
+          license: script.prescriber.license_number,
+          drug: med?.drug_name,
+          din: med?.din,
+          qty: med?.quantity,
+          refills: med?.refills,
+          sig: med?.sig,
+        },
+      }),
+    }).catch(() => undefined);
+  }, []);
+
+  const sendKrollStep = React.useCallback(
+    async (scriptId: string, step: KrollStep): Promise<{ ok: boolean; message: string }> => {
+      const script = scriptsRef.current.find((c) => c.id === scriptId);
+      if (!script) return { ok: false, message: "Not found" };
+      const payload = buildStepPayload(script, 0, settingsRef.current.pms, step);
+      return helperRef.current!.sendStep(settingsRef.current.helperUrl, payload, settingsRef.current.helperToken);
+    },
+    [],
+  );
+
+  /** Staff finished the entry in Kroll: mark the script and the fax as pushed. */
+  const completeKrollPush = React.useCallback(
+    (scriptId: string) => {
+      const script = scriptsRef.current.find((c) => c.id === scriptId);
+      if (!script) return;
+      reportPushed(script);
+      setScripts((prev) =>
+        prev.map((c) =>
+          c.id === scriptId
+            ? { ...c, status: "pushed", pushedAt: new Date().toISOString(), pushedTo: settingsRef.current.pms }
+            : c,
+        ),
+      );
+    },
+    [reportPushed],
+  );
+
   const pushScript = React.useCallback(
     async (
       scriptId: string,
@@ -462,33 +520,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         onStep,
         settingsRef.current.helperToken,
       );
-      if (result.ok && result.mode === "helper" && script.faxMailId) {
-        // Really typed into Kroll (not simulated): tell the cloud, so the fax leaves the to-do list and the agent can
-        // later compare what was pushed with what Kroll finally holds, and learn from staff changes to the sig.
-        const med = script.medications[0];
-        const base = settingsRef.current.apiBaseUrl.replace(/\/$/, "");
-        void fetch(`${base}/api/queue`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", "x-access-token": settingsRef.current.apiToken },
-          body: JSON.stringify({
-            kind: "fax",
-            action: "pushed",
-            store_id: script.faxStoreId || "default",
-            mail_id: script.faxMailId,
-            pushed: {
-              patient: script.patient.full_name,
-              dob: script.patient.dob,
-              prescriber: script.prescriber.name,
-              license: script.prescriber.license_number,
-              drug: med?.drug_name,
-              din: med?.din,
-              qty: med?.quantity,
-              refills: med?.refills,
-              sig: med?.sig,
-            },
-          }),
-        }).catch(() => undefined);
-      }
+      if (result.ok && result.mode === "helper") reportPushed(script);
       if (result.ok) {
         setScripts((prev) =>
           prev.map((c) =>
@@ -659,6 +691,8 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     reverifyDin,
     verifyScript,
     pushScript,
+    sendKrollStep,
+    completeKrollPush,
     createManualScript,
     checkHelper,
     resetQueue,

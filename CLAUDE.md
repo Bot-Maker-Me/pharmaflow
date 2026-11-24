@@ -6,7 +6,7 @@ Read this first. It exists so you do not need to re-explore the repo. Read only 
 Fax prescription intake for Canadian pharmacies using Kroll (SQL Server, no public API).
 Three parts:
 1. **`helper/flow.py`** - the ONE server-PC file (Python, ~2500 lines). Polls Kroll SQL, reads fax images, talks to the cloud, learns from staff.
-2. **`helper/workstation_helper.py`** - keystroke helper on a workstation (types into Kroll after staff verify). Not used in SHADOW mode.
+2. **`helper/workstation_helper.py`** - keystroke helper on a workstation (types into Kroll after staff verify). Not used in SHADOW mode. Kroll entry is guided: `KrollGuidedDialog` calls `/autofill` with `step` = patient|doctor|drug|sig|qty (Rx Dropoff Form); staff pick the drug/Y themselves.
 3. **Web app** - React + Vite + Tailwind + shadcn (`src/`), Vercel serverless functions (`api/`), Supabase (`supabase/migrations`).
 
 ## Hard rules
@@ -78,7 +78,7 @@ CLI flags: `--discover` list DB tables/columns and exit | `--skip-backlog` ignor
 
 ### Web app routes (src/App.tsx)
 `/` -> Landing, `/login` -> Login, `(index)` -> Index, `verify` -> Verify, `verify/:scriptId` -> Verify, `live` -> Live, `inbox` -> Inbox, `queue` -> Queue, `settings` -> Settings, `*` -> NotFound
-Components: AppShell, Confidence, ConfidenceChart, ConfidenceField, DocumentViewer, HelperStatus, ManualEntryDialog, MedicationCard, PmsSelector, PushDialog, QueueTable, QuickActions, RequireAuth, ScriptWorkspace, StatCard, UploadDropzone
+Components: AppShell, Confidence, ConfidenceChart, ConfidenceField, DocumentViewer, HelperStatus, KrollGuidedDialog, ManualEntryDialog, MedicationCard, PmsSelector, PushDialog, QueueTable, QuickActions, RequireAuth, ScriptWorkspace, StatCard, UploadDropzone
 
 ### Database and scripts
 Supabase migrations (9), newest last: 20261104_extraction_learning.sql, 20261104_live_dashboard.sql, 20261105_multi_tenant_security.sql, 20261106_script_image_ocr.sql, 20261119_learning_loop.sql, 20261121_inbound_faxes.sql

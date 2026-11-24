@@ -327,6 +327,46 @@ class Typist:
             time.sleep(SETTINGS.step_delay)
 
 
+# Step-by-step Kroll entry (Rx Dropoff Form). Staff keep the judgement calls (is it the right
+# patient, is the drug in the history, which product); the helper does the typing for one step.
+KROLL_STEPS = {
+    "patient": ("patient_lookup",),
+    "doctor": ("prescriber_license",),
+    "drug": ("drug_name",),
+    "sig": ("sig_text",),
+    "qty": ("quantity",),
+}
+
+
+def _kroll_step(t: Typist, step: str, data: dict) -> str:
+    if step == "patient":
+        t.press("f3")
+        t.paste(data["patient_lookup"])
+        t.press("enter")
+        if not SETTINGS.dry_run:
+            time.sleep(1.2)                       # let Kroll load the patient
+        t.hotkey("shift", "f3")                   # All Rxs (patient history)
+        return ("Patient searched and history opened. Check the name and date of birth in Kroll, "
+                "find the drug and press Y (or Enter if it is not there).")
+    if step == "doctor":
+        t.press("f7")
+        t.paste(data["prescriber_license"])
+        t.press("enter")
+        return "Doctor set from the licence number. Check the doctor name in Kroll."
+    if step == "drug":
+        t.press("f5")
+        t.paste(data["drug_name"])
+        t.press("enter")
+        return "Drug search opened. Pick the drug in Kroll."
+    if step == "sig":
+        t.paste(data["sig_text"])                 # into whichever Sig box you clicked in Kroll
+        return "Sig pasted into the box you had selected in Kroll."
+    if step == "qty":
+        t.type_text(str(data["quantity"]))        # into whichever quantity box you clicked
+        return "Quantity typed into the box you had selected in Kroll."
+    raise ValidationError(f"Unknown step: {step}")
+
+
 def _autofill_kroll(t: Typist, data: dict) -> str:
     """TELUS Kroll: F3 patient, F7 prescriber, F5 drug, then sig + quantity."""
     t.press("f3")
@@ -411,7 +451,7 @@ DRIVERS: Dict[str, Callable[[Typist, dict], str]] = {
 }
 
 
-def validate_data(data: dict) -> Dict[str, str]:
+def validate_data(data: dict, required: Optional[tuple] = None) -> Dict[str, str]:
     clean: Dict[str, str] = {}
     for key in ("patient_lookup", "prescriber_license", "din_code", "drug_name", "quantity", "sig_text"):
         value = data.get(key, "")
@@ -421,12 +461,12 @@ def validate_data(data: dict) -> Dict[str, str]:
         if any(ord(ch) < 32 for ch in value):
             raise ValidationError(f"{key} contains control characters")
         clean[key] = value
-    for key in ("patient_lookup", "prescriber_license", "quantity", "sig_text"):
+    for key in (required or ("patient_lookup", "prescriber_license", "quantity", "sig_text")):
         if not clean[key]:
             raise ValidationError(f"Missing required field: {key}")
     if clean["din_code"] and not DIN_RE.match(clean["din_code"]):
         raise ValidationError("din_code must be exactly 8 digits")
-    if not re.match(r"^\d+(\.\d+)?$", clean["quantity"]):
+    if (required is None or clean["quantity"]) and not re.match(r"^\d+(\.\d+)?$", clean["quantity"]):
         raise ValidationError("quantity must be a number")
     return clean
 
@@ -495,8 +535,11 @@ def autofill():
     raw = payload.get("data")
     if not isinstance(raw, dict) or not raw:
         return jsonify({"status": "error", "message": "Missing 'data' object"}), 400
+    step = str(payload.get("step") or "").lower()
+    if step and (target != "KROLL" or step not in KROLL_STEPS):
+        return jsonify({"status": "error", "message": f"Unknown step '{step}' for {target}"}), 400
     try:
-        data = validate_data(raw)
+        data = validate_data(raw, KROLL_STEPS[step] if step else None)
     except ValidationError as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
     if not _autofill_lock.acquire(blocking=False):
@@ -505,8 +548,8 @@ def autofill():
         if not SETTINGS.dry_run:
             _require_backend()
         _check_window(target)
-        log.info("%s autofill start (din=%s, qty=%s)", target, data["din_code"] or "none", data["quantity"])
-        message = driver(Typist(), data)
+        log.info("%s autofill start (step=%s)", target, step or "all")
+        message = _kroll_step(Typist(), step, data) if step else driver(Typist(), data)
     except KeystrokeUnavailable as exc:
         return jsonify({"status": "error", "message": str(exc)}), 503
     except WrongWindow as exc:

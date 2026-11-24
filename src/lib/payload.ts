@@ -9,8 +9,11 @@ import { toPmsSig } from "./sig";
  * One payload is produced per medication, because a legacy PMS treats each drug
  * on a prescription as its own entry.
  */
+export type KrollStep = "patient" | "doctor" | "drug" | "sig" | "qty";
+
 export interface HelperPayload {
   target_system: string;
+  step?: KrollStep;
   data: {
     patient_lookup: string;
     prescriber_license: string;
@@ -65,4 +68,14 @@ export function payloadForMedication(
   pmsId: PmsId,
 ): HelperPayload["data"] {
   return buildHelperPayload(script, medIndex, pmsId).data;
+}
+
+/** One small Kroll step (guided entry): the helper types just this field. */
+export function buildStepPayload(
+  script: Script,
+  medIndex: number,
+  pmsId: PmsId,
+  step: KrollStep,
+): HelperPayload {
+  return { ...buildHelperPayload(script, medIndex, pmsId), step };
 }
