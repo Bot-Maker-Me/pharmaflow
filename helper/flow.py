@@ -1690,6 +1690,14 @@ class CloudClient:
             self.log.warning("Could not list pushed faxes: %s", exc)
             return []
 
+    def get_recent_fax_scripts(self, n: int) -> List[Dict[str, Any]]:
+        try:
+            resp = self.session.get(self._sibling("agent-fax"), params={"recent": int(n), "store_id": self.cfg.store_id},
+                                    timeout=CLOUD_TIMEOUT_SEC)
+            return list(resp.json().get("items") or []) if resp.status_code == 200 else []
+        except (requests.RequestException, ValueError):
+            return []
+
     def push_fax_result(self, payload: Dict[str, Any]) -> bool:
         try:
             resp = self.session.post(self._sibling("agent-fax"), json=payload, timeout=CLOUD_TIMEOUT_SEC)
@@ -2278,7 +2286,7 @@ class PharmFlowAgent:
                     at = now
                 # Kroll stores local server time: compare from the start of the day the fax was pushed
                 since = at.astimezone().replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
-                found = find_finished_rx(self.db.ensure(), r, pushed, since)
+                found = find_finished_rx(self.db.ensure(), r, pushed, since, self.cfg.schema)
                 if found is None and now - at < dt.timedelta(hours=FAX_LEARN_GIVE_UP_HOURS):
                     continue                                       # staff have not finished it in Kroll yet
                 payload = {"type": "fax_result", "store_id": self.cfg.store_id, "mail_id": item.get("mail_id"),
@@ -2640,7 +2648,8 @@ def split_patient_name(full: str) -> Tuple[str, str]:
     return (parts[0], parts[-1]) if len(parts) > 1 else ("", parts[0])
 
 
-def find_finished_rx(conn, rx: Dict[str, str], pushed: Dict[str, Any], since: dt.datetime) -> Optional[Dict[str, Any]]:
+def find_finished_rx(conn, rx: Dict[str, str], pushed: Dict[str, Any], since: dt.datetime,
+                     schema: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
     """Find the Rx staff finished in Kroll for a fax that was pushed (read-only SELECTs).
     Patient = name + date of birth in dbo.Pat; Rx = that patient + the pushed DIN, filled on/after `since`.
     Returns None when nothing matches yet, else {rx_sig, rx_qty, rx_refills}."""
@@ -2651,8 +2660,10 @@ def find_finished_rx(conn, rx: Dict[str, str], pushed: Dict[str, Any], since: dt
         return None
     cur = conn.cursor()
     try:
-        cur.execute("SELECT TOP 5 ID FROM dbo.Pat WITH (NOLOCK) WHERE LastName = ? AND FirstName LIKE ? "
-                    "AND CAST(Birthday AS date) = ?", (last, (first or "") + "%", dob))
+        sc = schema or {}
+        cur.execute(f"SELECT TOP 5 {sc.get('pat_id', 'ID')} FROM {sc.get('pat_table', 'dbo.Pat')} WITH (NOLOCK) "
+                    f"WHERE {sc.get('pat_last', 'LastName')} = ? AND {sc.get('pat_first', 'FirstName')} LIKE ? "
+                    f"AND CAST({sc.get('pat_dob', 'Birthday')} AS date) = ?", (last, (first or "") + "%", dob))
         pat_ids = [r[0] for r in cur.fetchall()]
         if not pat_ids:
             return None
@@ -2667,6 +2678,74 @@ def find_finished_rx(conn, rx: Dict[str, str], pushed: Dict[str, Any], since: dt
         return {c[0]: jsonable(v) for c, v in zip(cur.description, row)}
     finally:
         cur.close()
+
+
+def _iso_date(text: Any) -> str:
+    """'1943-01-14', '14/01/1943', 'Jan 14, 1943' ... -> '1943-01-14' ('' if unreadable)."""
+    raw = str(text or "").strip()[:20]
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y", "%b %d, %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y"):
+        try:
+            return dt.datetime.strptime(raw, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return ""
+
+
+def kroll_match(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
+    """Read-only check of one OCR'd prescription against Kroll. Never writes.
+    patient: none | one | several (name + date of birth). drug_in_history: did that patient get this drug before.
+    doctor: found | none (licence number). Returns plain facts, the cloud/app decides what is 'ready'."""
+    cfg = db.cfg
+    s, rx = cfg.schema, cfg.rx_schema
+    out: Dict[str, Any] = {"patient": "none", "patient_id": None, "dob_ok": False, "drug_candidates": 0,
+                           "drug_in_history": False, "last": None, "doctor": "none", "doctor_name_ok": None}
+    patient = script.get("patient") or {}
+    med = (script.get("medications") or [{}])[0]
+    doc = script.get("prescriber") or {}
+    first, last = split_patient_name(patient.get("full_name"))
+    dob = _iso_date(patient.get("dob"))
+    cur = db.ensure().cursor()
+    try:
+        if last and dob:
+            cur.execute(f"SELECT TOP 5 {s['pat_id']} FROM {s['pat_table']} WITH (NOLOCK) "
+                        f"WHERE {s['pat_last']} = ? AND {s['pat_first']} LIKE ? AND CAST({s['pat_dob']} AS date) = ?",
+                        (last, (first or "") + "%", dob))
+            ids = [r[0] for r in cur.fetchall()]
+            out["patient"] = "none" if not ids else "one" if len(ids) == 1 else "several"
+            out["dob_ok"] = bool(ids)
+            if len(ids) == 1:
+                out["patient_id"] = ids[0]
+        cands = db.search_drugs(med.get("drug_name", ""), med.get("strength", "")) if med.get("drug_name") else []
+        out["drug_candidates"] = len(cands)
+        if out["patient_id"] is not None and cands and rx.get("rx_table") and rx.get("rx_pat_id") and rx.get("rx_drug_id"):
+            marks = ",".join("?" for _ in cands)
+            cols = ", ".join(f"{rx[k]} AS {k}" for k in ("rx_drug_id", "rx_sig", "rx_qty", "rx_doc_id", "rx_created") if rx.get(k))
+            cur.execute(f"SELECT TOP 1 {cols} FROM {rx['rx_table']} WITH (NOLOCK) "
+                        f"WHERE {rx['rx_pat_id']} = ? AND {rx['rx_drug_id']} IN ({marks}) "
+                        f"ORDER BY {rx.get('rx_created') or rx['rx_id']} DESC",
+                        (out["patient_id"], *[c["drug_id"] for c in cands]))
+            row = cur.fetchone()
+            if row is not None:
+                got = {c[0]: jsonable(v) for c, v in zip(cur.description, row)}
+                out["drug_in_history"] = True
+                din = next((c["din"] for c in cands if c["drug_id"] == got.get("rx_drug_id")), "")
+                out["last"] = {"din": din, "sig": got.get("rx_sig"), "qty": got.get("rx_qty"),
+                               "filled": got.get("rx_created")}
+        lic = "".join(ch for ch in str(doc.get("license_number") or "") if ch.isalnum())
+        if lic and s.get("lic_table") and s.get("lic_num"):
+            cur.execute(f"SELECT TOP 3 {s['lic_doc_id']} FROM {s['lic_table']} WITH (NOLOCK) WHERE {s['lic_num']} = ?", (lic,))
+            doc_ids = [r[0] for r in cur.fetchall()]
+            if doc_ids:
+                out["doctor"] = "found"
+                dlast = split_patient_name(doc.get("name"))[1].lower()
+                if dlast and s.get("doc_table") and s.get("doc_last"):
+                    cur.execute(f"SELECT TOP 1 {s['doc_last']} FROM {s['doc_table']} WITH (NOLOCK) WHERE {s['doc_id']} = ?",
+                                (doc_ids[0],))
+                    r = cur.fetchone()
+                    out["doctor_name_ok"] = bool(r and str(r[0] or "").strip().lower() == dlast)
+    finally:
+        cur.close()
+    return out
 
 
 def fetch_inbound_faxes(conn, after_mail_id: int = 0, limit: int = 50,
@@ -2739,6 +2818,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="show what the agent has learned so far (no patient data) and exit")
     parser.add_argument("--inbound-test", type=int, nargs="?", const=10, metavar="N",
                         help="list the newest N inbound faxes (Kroll Inbound Docs) and check their images load, then exit")
+    parser.add_argument("--match-test", type=int, nargs="?", const=10, metavar="N",
+                        help="check the newest N prescription faxes against Kroll (patient, drug history, doctor) and "
+                             "print yes/no results only (no names), then exit")
     parser.add_argument("--test", action="store_true", help="connect, poll once, print counts, exit")
     args = parser.parse_args(argv)
 
@@ -2751,6 +2833,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:
         print(f"FATAL config error: {exc}", file=sys.stderr)
         return 1
+
+    if args.match_test:
+        logger = setup_logging(cfg.agent_version)
+        db = KrollDB(cfg, logger)
+        items = CloudClient(cfg, logger).get_recent_fax_scripts(args.match_test)
+        print(f"{len(items)} recent prescription fax(es) from the cloud\n")
+        tally = {"patient_one": 0, "drug_in_history": 0, "doctor_found": 0}
+        for i, item in enumerate(items, 1):
+            script = ((item.get("ocr") or {}).get("scripts") or [{}])[0]
+            try:
+                m = kroll_match(db, script)
+            except Exception as exc:  # noqa: BLE001
+                print(f"{i:>2}. FAILED: {str(exc)[:120]}")
+                continue
+            tally["patient_one"] += m["patient"] == "one"
+            tally["drug_in_history"] += bool(m["drug_in_history"])
+            tally["doctor_found"] += m["doctor"] == "found"
+            print(f"{i:>2}. patient={m['patient']:<7} dob_match={'yes' if m['dob_ok'] else 'no ':<3} "
+                  f"drug_products_in_kroll={m['drug_candidates']:<3} drug_in_patient_history={'yes' if m['drug_in_history'] else 'no ':<3} "
+                  f"doctor={m['doctor']:<5} doctor_name_matches={m['doctor_name_ok']}")
+        print(f"\nSummary of {len(items)}: patient found exactly once {tally['patient_one']}, "
+              f"drug already in history {tally['drug_in_history']}, doctor found by licence {tally['doctor_found']}")
+        return 0
 
     if args.inbound_test:
         logger = setup_logging(cfg.agent_version)

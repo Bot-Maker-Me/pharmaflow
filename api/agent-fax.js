@@ -103,6 +103,23 @@ async function listPendingLearn(req, res, cfg) {
   return send(res, resp.ok ? 200 : 502, { ok: resp.ok, items: resp.ok ? await resp.json() : [] });
 }
 
+/** GET ?recent=N&store_id=  -> OCR of the newest N prescription faxes (agent-only: used by `flow.py --match-test`). */
+async function listRecentScripts(req, res, cfg) {
+  const q = new URL(req.url, "http://x").searchParams;
+  const storeId = String(q.get("store_id") || "default").slice(0, 64);
+  const n = Math.min(30, Math.max(1, Number(q.get("recent")) || 10));
+  if (!cfg) return send(res, 200, { ok: true, items: [] });
+  const params = new URLSearchParams({
+    store_id: `eq.${storeId}`,
+    is_prescription: "eq.true",
+    select: "mail_id,ocr",
+    order: "mail_id.desc",
+    limit: String(n),
+  });
+  const resp = await fetch(`${cfg.url}/rest/v1/inbound_faxes?${params}`, { headers: sbHeaders(cfg.key) });
+  return send(res, resp.ok ? 200 : 502, { ok: resp.ok, items: resp.ok ? await resp.json() : [] });
+}
+
 /**
  * POST { type:"fax_result", store_id, mail_id, found, final:{sig,qty,refills}, give_up }
  * The agent looked in Kroll for the Rx staff finished from a pushed fax. When the final sig differs from the
@@ -147,7 +164,10 @@ export default async function handler(req, res) {
   const expected = process.env.AGENT_API_KEY;
   if (!expected || expected.length < 16) return send(res, 503, { error: "AGENT_API_KEY not configured" });
   if (!keyMatches(req.headers["x-api-key"], expected)) return send(res, 401, { error: "Unauthorized" });
-  if (req.method === "GET") return listPendingLearn(req, res, supabaseConfig());
+  if (req.method === "GET") {
+    const q = new URL(req.url, "http://x").searchParams;
+    return q.get("recent") ? listRecentScripts(req, res, supabaseConfig()) : listPendingLearn(req, res, supabaseConfig());
+  }
   if (req.method !== "POST") return send(res, 405, { error: "GET or POST only" });
   let body = req.body;
   if (typeof body === "string") {
