@@ -1215,6 +1215,8 @@ class KrollDB:
     # ---- DIN lookup in Kroll's own drug table (read-only SELECTs, parameterised) ----------------------
 
     _DRUG_TABLES = ("Drg", "Drug", "DrugMaster", "Drugs")
+    _MAKERS = {"jamp", "apo", "teva", "sandoz", "mylan", "auro", "pms", "ratio", "riva", "sivem", "taro", "act", "mint",
+               "sanis", "pro", "dom", "novo", "gen", "van", "zym", "bio", "mar", "nat", "pharma", "ran", "med"}
     _NOISE = {"mg", "mcg", "ml", "oral", "capsule", "capsules", "cap", "caps", "tablet", "tablets", "tab", "tabs",
               "hcl", "hydrochloride", "sodium", "potassium", "calcium", "sulfate", "sulphate", "maleate",
               "tartrate", "besylate", "succinate", "and", "the", "of"}
@@ -1298,9 +1300,11 @@ class KrollDB:
         ds = self._resolve_drug_schema()
         if not ds or not ds["drug_name"]:
             return []
-        words = [w for w in re.split(r"[^a-z\-]+", (drug_name or "").lower()) if len(w) > 2 and w not in self._NOISE]
+        words = [w for w in re.split(r"[^a-z]+", (drug_name or "").lower()) if len(w) > 3 and w not in self._NOISE]
+        words = [w for w in words if w not in self._MAKERS] or words
         if not words:
             return []
+        words.sort(key=len, reverse=True)     # the longest word is nearly always the drug itself
         num = re.search(r"(\d+(?:\.\d+)?)\s*(mg|mcg|ug|g|ml|iu|%)", f"{strength} {drug_name}".lower())
         nc = [ds["drug_name"]] + ([ds["drug_name2"]] if ds.get("drug_name2") else [])
         name_cond = "(" + " OR ".join(f"[{c}] LIKE ?" for c in nc) + ")"
@@ -2830,6 +2834,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "print yes/no results only (no names), then exit")
     parser.add_argument("--pending-test", action="store_true",
                         help="count inbound faxes by processed/pending markers (no patient data) and exit")
+    parser.add_argument("--drug-test", nargs="+", metavar="TEXT",
+                        help="show how Kroll's drug table names a drug, e.g. --drug-test candesartan 4 mg (drug names only)")
     parser.add_argument("--test", action="store_true", help="connect, poll once, print counts, exit")
     args = parser.parse_args(argv)
 
@@ -2842,6 +2848,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:
         print(f"FATAL config error: {exc}", file=sys.stderr)
         return 1
+
+    if args.drug_test:
+        logger = setup_logging(cfg.agent_version)
+        db = KrollDB(cfg, logger)
+        text = " ".join(args.drug_test)
+        ds = db._resolve_drug_schema() or {}
+        print("drug schema:", ds)
+        found = db.search_drugs(text)
+        print(f"search_drugs({text!r}) -> {len(found)} product(s)")
+        for f in found[:8]:
+            print("  ", f)
+        word = max((w for w in re.split(r"[^a-z]+", text.lower()) if w not in KrollDB._NOISE), key=len, default="")
+        if ds and word:
+            cur = db.ensure().cursor()
+            cur.execute(f"SELECT TOP 10 [{ds['drug_id']}], [{ds['drug_din']}], [{ds['drug_name']}] FROM {ds['drug_table']} "
+                        f"WITH (NOLOCK) WHERE [{ds['drug_name']}] LIKE ?", (f"%{word}%",))
+            print(f"raw rows containing {word!r}:")
+            for row in cur.fetchall():
+                print("  ", " | ".join(str(v) for v in row))
+        return 0
 
     if args.pending_test:
         logger = setup_logging(cfg.agent_version)
@@ -2862,6 +2888,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("script_image | deleted | patient_linked | rx_linked | age | count")
         for row in cur.fetchall():
             print(" | ".join(str(v) for v in row))
+        print("\n-- last 7 days, by recipient markers (folder / read / deleted / flagged) --")
+        try:
+            cur.execute(
+                "SELECT r.FolderId, CASE WHEN r.DateRead IS NULL THEN 'unread' ELSE 'read' END, "
+                "CASE WHEN r.DateDeleted IS NULL THEN 'not deleted' ELSE 'deleted' END, r.Flagged, COUNT(*) "
+                "FROM dbo.Mail m WITH (NOLOCK) JOIN dbo.MailRecipient r WITH (NOLOCK) ON r.MailId = m.Id "
+                "WHERE m.MessageType = 19 AND m.MessageId LIKE 'SRFax.%' AND m.DateCreated >= DATEADD(day,-7,GETDATE()) "
+                "GROUP BY r.FolderId, CASE WHEN r.DateRead IS NULL THEN 'unread' ELSE 'read' END, "
+                "CASE WHEN r.DateDeleted IS NULL THEN 'not deleted' ELSE 'deleted' END, r.Flagged ORDER BY 5 DESC")
+            print("folder | read | deleted | flagged | count")
+            for row in cur.fetchall():
+                print(" | ".join(str(v) for v in row))
+        except Exception as exc:  # noqa: BLE001
+            print("recipient query failed:", str(exc)[:150])
         print("\nCompare with Kroll: Inbound Docs badge / the 'Pending' list count shown right now.")
         return 0
 
