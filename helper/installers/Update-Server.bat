@@ -7,18 +7,28 @@ if errorlevel 1 (
   powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
   exit /b
 )
-set "DEST=C:\PharmFlow\helper"
 echo.
 echo  PharmFlow - update Kroll server
 echo  --------------------------------
+set "AGENT="
+set "PYX="
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0find-agent.ps1" -Out "%TEMP%\pf_agent.bat"
+call "%TEMP%\pf_agent.bat"
+if not defined AGENT (
+  echo  Could not find where the PharmFlow agent is installed on this PC.
+  echo  Run this on the Kroll server, the PC that has the PharmFlow Agent task.
+  pause
+  exit /b
+)
+echo  PharmFlow agent folder: %AGENT%
 if not exist "%~dp0flow.py" (
   echo  flow.py is not next to this file. Put the new flow.py in the same folder and run again.
   pause
   exit /b
 )
-copy /Y "%~dp0flow.py" "%DEST%\flow.py" >nul
+copy /Y "%~dp0flow.py" "%AGENT%\flow.py" >nul
 if errorlevel 1 (
-  echo  Could not copy flow.py to %DEST%
+  echo  Could not copy flow.py to %AGENT%
   pause
   exit /b
 )
