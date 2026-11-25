@@ -194,6 +194,13 @@ class AgentConfig:
                 f"config.ini not found at {path}. Copy config.ini.example to config.ini first."
             )
 
+        try:
+            path.open("rb").close()          # configparser.read() silently skips unreadable files
+        except PermissionError as exc:
+            raise PermissionError(
+                f"Access denied reading {path}. This file is protected: run as Administrator "
+                "(right-click, Run as administrator)."
+            ) from exc
         cp = configparser.ConfigParser(interpolation=None)  # passwords may contain '%'
         cp.read(path, encoding="utf-8")
 

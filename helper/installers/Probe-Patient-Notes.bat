@@ -1,5 +1,11 @@
 @echo off
 title PharmFlow - look for patient notes in Kroll (read only)
+net session >nul 2>nul
+if errorlevel 1 (
+  echo  Asking for Administrator permission...
+  powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  exit /b
+)
 set "AGENT="
 set "PYX="
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0find-agent.ps1" -Out "%TEMP%\pf_agent.bat"

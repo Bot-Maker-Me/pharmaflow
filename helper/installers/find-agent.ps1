@@ -13,7 +13,7 @@ try {
 if (-not $dir -or -not (Test-Path (Join-Path $dir 'flow.py'))) {
   $hit = Get-ChildItem 'C:\' -Filter flow.py -Recurse -Depth 4 -ErrorAction SilentlyContinue |
          Where-Object { Test-Path (Join-Path $_.DirectoryName 'config.ini') -PathType Leaf } |
-         Where-Object { (Get-Content (Join-Path $_.DirectoryName 'config.ini') -Raw) -match '(?im)^\s*\[Database\]' } |
+         Where-Object { (Get-Content (Join-Path $_.DirectoryName 'config.ini') -Raw -ErrorAction SilentlyContinue) -match '(?im)^\s*\[Database\]' } |
          Select-Object -First 1
   if ($hit) { $dir = $hit.DirectoryName }
 }
