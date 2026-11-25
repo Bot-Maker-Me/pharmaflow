@@ -2718,12 +2718,24 @@ def kroll_match(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
     cur = db.ensure().cursor()
     try:
         if last and dob:
-            cur.execute(f"SELECT TOP 5 {s['pat_id']} FROM {s['pat_table']} WITH (NOLOCK) "
-                        f"WHERE {s['pat_last']} = ? AND {s['pat_first']} LIKE ? AND CAST({s['pat_dob']} AS date) = ?",
-                        (last, (first or "") + "%", dob))
-            ids = [r[0] for r in cur.fetchall()]
+            cur.execute(f"SELECT TOP 10 {s['pat_id']}, {s['pat_first']} FROM {s['pat_table']} WITH (NOLOCK) "
+                        f"WHERE {s['pat_last']} = ? AND CAST({s['pat_dob']} AS date) = ?", (last, dob))
+            rows = [(r[0], str(r[1] or "").strip().lower()) for r in cur.fetchall()]
+            want = (first or "").strip().lower()
+            # same last name + same birth date; narrow by first name: exact, then starts-with, then same initial
+            pick = [r for r in rows if want and r[1] == want]
+            fuzzy = False
+            if not pick and want:
+                pick = [r for r in rows if r[1].startswith(want) or want.startswith(r[1]) and r[1]]
+            if not pick and want:
+                pick = [r for r in rows if r[1][:1] == want[:1]]
+                fuzzy = bool(pick)
+            if not pick and not want:
+                pick = rows
+            ids = [r[0] for r in pick]
             out["patient"] = "none" if not ids else "one" if len(ids) == 1 else "several"
             out["dob_ok"] = bool(ids)
+            out["patient_fuzzy"] = fuzzy
             if len(ids) == 1:
                 out["patient_id"] = ids[0]
         cands = db.search_drugs(med.get("drug_name", ""), med.get("strength", "")) if med.get("drug_name") else []
