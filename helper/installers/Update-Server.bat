@@ -21,12 +21,15 @@ if not defined AGENT (
   exit /b
 )
 echo  PharmFlow agent folder: %AGENT%
-if not exist "%~dp0flow.py" (
-  echo  flow.py is not next to this file. Put the new flow.py in the same folder and run again.
+set "SRC=%~dp0flow.py"
+if not exist "%SRC%" set "SRC=%~dp0..\flow.py"
+if not exist "%SRC%" (
+  echo  flow.py was not found in the installers folder or the folder above it.
+  echo  Extract the whole zip first, then run this again.
   pause
   exit /b
 )
-copy /Y "%~dp0flow.py" "%AGENT%\flow.py" >nul
+copy /Y "%SRC%" "%AGENT%\flow.py" >nul
 if errorlevel 1 (
   echo  Could not copy flow.py to %AGENT%
   pause
