@@ -2821,6 +2821,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--match-test", type=int, nargs="?", const=10, metavar="N",
                         help="check the newest N prescription faxes against Kroll (patient, drug history, doctor) and "
                              "print yes/no results only (no names), then exit")
+    parser.add_argument("--pending-test", action="store_true",
+                        help="count inbound faxes by processed/pending markers (no patient data) and exit")
     parser.add_argument("--test", action="store_true", help="connect, poll once, print counts, exit")
     args = parser.parse_args(argv)
 
@@ -2833,6 +2835,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:
         print(f"FATAL config error: {exc}", file=sys.stderr)
         return 1
+
+    if args.pending_test:
+        logger = setup_logging(cfg.agent_version)
+        cur = KrollDB(cfg, logger).ensure().cursor()
+        cur.execute(
+            "SELECT CASE WHEN a.ScriptImageId IS NULL THEN 'no' ELSE 'yes' END AS script_image, "
+            "CASE WHEN m.SenderDateDeleted IS NULL THEN 'no' ELSE 'yes' END AS deleted, "
+            "CASE WHEN m.PatId IS NULL THEN 'no' ELSE 'yes' END AS patient_linked, "
+            "CASE WHEN m.RxNum IS NULL THEN 'no' ELSE 'yes' END AS rx_linked, "
+            "CASE WHEN m.DateCreated >= DATEADD(day,-7,GETDATE()) THEN 'last 7 days' ELSE 'older' END AS age, "
+            "COUNT(*) AS n FROM dbo.Mail m WITH (NOLOCK) JOIN dbo.MailAttachment a WITH (NOLOCK) ON a.MailId = m.Id "
+            "WHERE m.MessageType = 19 AND m.MessageId LIKE 'SRFax.%' "
+            "GROUP BY CASE WHEN a.ScriptImageId IS NULL THEN 'no' ELSE 'yes' END, "
+            "CASE WHEN m.SenderDateDeleted IS NULL THEN 'no' ELSE 'yes' END, "
+            "CASE WHEN m.PatId IS NULL THEN 'no' ELSE 'yes' END, CASE WHEN m.RxNum IS NULL THEN 'no' ELSE 'yes' END, "
+            "CASE WHEN m.DateCreated >= DATEADD(day,-7,GETDATE()) THEN 'last 7 days' ELSE 'older' END "
+            "ORDER BY 6 DESC")
+        print("script_image | deleted | patient_linked | rx_linked | age | count")
+        for row in cur.fetchall():
+            print(" | ".join(str(v) for v in row))
+        print("\nCompare with Kroll: Inbound Docs badge / the 'Pending' list count shown right now.")
+        return 0
 
     if args.match_test:
         logger = setup_logging(cfg.agent_version)
