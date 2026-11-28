@@ -67,6 +67,11 @@ export interface ManualScriptInput {
   fax_from?: string;
   /** Extra "please check" lines shown on the review screen. */
   extra_flags?: string[];
+  /** Second, third... medication on the same fax. */
+  extra_meds?: Array<{
+    drug_name: string; din: string; strength: string; quantity: number; refills: number; sig: string; is_compound: boolean;
+    din_candidates?: DinCandidate[]; din_source?: string;
+  }>;
 }
 
 interface AppStoreValue {
@@ -619,6 +624,32 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
               sig: input.sig ? 0.9 : 0.3,
             },
           },
+          ...(input.extra_meds ?? []).map((x) => {
+            const e2 = enrichMedicationFromDin({ din: x.din, drug_name: x.drug_name, strength: x.strength, is_compound: x.is_compound });
+            return {
+              id: uid("med"),
+              drug_name: e2.drug_name || x.drug_name,
+              din: e2.din,
+              strength: e2.strength,
+              quantity: x.quantity,
+              refills: x.refills,
+              sig: x.sig,
+              is_compound: x.is_compound,
+              confidence: 0.9,
+              din_status: e2.din_status,
+              din_product: e2.din_product,
+              din_candidates: x.din_candidates,
+              din_source: x.din_source,
+              field_scores: {
+                drug_name: 0.85,
+                din: e2.din ? 0.9 : 0.2,
+                strength: e2.strength ? 0.9 : 0.2,
+                quantity: x.quantity ? 0.95 : 0.3,
+                refills: 0.9,
+                sig: x.sig ? 0.9 : 0.3,
+              },
+            };
+          }),
         ],
         overallConfidence: input.confidence ?? (source === "kroll_sql" ? 0.85 : 1),
         illegible: false,

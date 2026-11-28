@@ -28,6 +28,7 @@ interface FaxRow {
   kroll_patient?: { status: "exact" | "corrected" | "ambiguous" | "none"; first: string; last: string; score: number; n_dob: number; dob_swapped: boolean; dob?: string; matched_by?: "dob" | "name" | "address" | "name+address"; tie_broken?: boolean; candidates?: Array<{ first: string; last: string; score: number }> } | null;
   kroll_enrich?: {
     doctor?: { status: "found" | "by_name" | "by_address" | "several" | "none"; first: string; last: string; licence: string; name_ok: boolean | null };
+    meds?: Array<{ drug: { candidates: Array<{ din: string; name: string; uses: number; in_history: boolean }>; pick: string | null; reason: string }; last_rx: { din: string; sig: string; qty: number | null; refills: number | null; filled: string } | null; din_fill: string }>;
     drug?: { candidates: Array<{ din: string; name: string; uses: number; in_history: boolean }>; pick: string | null; reason: string };
     last_rx?: { din: string; sig: string; qty: number | null; refills: number | null; filled: string } | null;
     fills?: { licence?: string; din?: string; doctor_name?: string };
@@ -88,7 +89,7 @@ function Counter({ label, cleared, received }: { label: string; cleared: number 
 }
 
 export default function Intake() {
-  const { settings, scripts, createManualScript, helperStatus, updatePatient, updatePrescriber, updateMedication } = useAppStore();
+  const { settings, scripts, createManualScript, helperStatus, updatePatient, updatePrescriber, updateMedication, updateScript } = useAppStore();
   const navigate = useNavigate();
   const [tab, setTab] = React.useState<Tab>("new");
   const [rows, setRows] = React.useState<FaxRow[]>([]);
@@ -195,6 +196,24 @@ export default function Intake() {
         license_number: s?.prescriber?.license_number || fillLic,
         drug_name: m?.drug_name || "",
         din: m?.din || fillDin,
+        extra_meds: (s?.medications ?? []).slice(1).map((mx, i) => {
+          const em = en?.meds?.[i + 1];
+          const dinX = (mx?.din || "").replace(/\D/g, "");
+          const fillX = !dinX && em?.din_fill ? em.din_fill : "";
+          return {
+            drug_name: mx?.drug_name || "",
+            din: mx?.din || fillX,
+            strength: mx?.strength || "",
+            quantity: Number(mx?.quantity) || 0,
+            refills: Number(mx?.refills) || 0,
+            sig: mx?.sig || "",
+            is_compound: Boolean(mx?.is_compound),
+            ...(em?.drug?.candidates?.length && !dinX ? {
+              din_source: fillX ? "kroll_unique_match" : "kroll_candidates",
+              din_candidates: em.drug.candidates.map((c) => ({ din: c.din, brand: c.name, company: "", strength: mx?.strength || "", form: "", uses: c.uses })),
+            } : {}),
+          };
+        }),
         ...(en?.drug?.candidates?.length && !faxDin ? {
           din_source: fillDin ? "kroll_unique_match" : "kroll_candidates",
           din_candidates: en.drug.candidates.map((c) => ({ din: c.din, brand: c.name, company: "", strength: m?.strength || "", form: "", uses: c.uses })),
@@ -225,6 +244,14 @@ export default function Intake() {
           ...(dr?.status === "several" ? [`Several doctors in Kroll match "${s?.prescriber?.name}" and the licence is missing - pick the doctor in Kroll`] : []),
           ...(en?.drug && !faxDin && !fillDin && en.drug.candidates.length > 1 ? [`${en.drug.candidates.length} Kroll products match this drug - staff pick the DIN`] : []),
           ...(lr ? [`Kroll's last Rx of this drug${lr.filled ? ` (${lr.filled})` : ""}: sig "${lr.sig ?? "?"}", qty ${lr.qty ?? "?"}, refills ${lr.refills ?? "?"}${m?.quantity && lr.qty != null && Number(lr.qty) !== Number(m.quantity) ? " - quantity differs from the fax" : ""}`] : []),
+          ...((s?.medications ?? []).slice(1).flatMap((mx, i) => {
+            const em = en?.meds?.[i + 1];
+            const out: string[] = [];
+            if (em?.din_fill) out.push(`${mx?.drug_name}: DIN ${em.din_fill} filled in from Kroll (${em.drug.reason}) - check it`);
+            else if (em && em.drug.candidates.length > 1 && !(mx?.din || "")) out.push(`${mx?.drug_name}: ${em.drug.candidates.length} Kroll products match - staff pick the DIN`);
+            if (em?.last_rx) out.push(`${mx?.drug_name}: Kroll's last Rx${em.last_rx.filled ? ` (${em.last_rx.filled})` : ""} was sig "${em.last_rx.sig ?? "?"}", qty ${em.last_rx.qty ?? "?"}, refills ${em.last_rx.refills ?? "?"}`);
+            return out;
+          })),
           ...(m?.sig_hint ? [`Staff usually change this sig to "${m.sig_hint.to}" (${m.sig_hint.hits}x) - check the dose and timing`] : []),
           ...(m?.sig_learned ? [`Sig was adjusted to match how staff usually write it - please confirm`] : []),
         ],
@@ -252,11 +279,24 @@ export default function Intake() {
       const en = fax.kroll_enrich;
       const existing = scripts.find((x) => x.faxMailId === fax.mail_id);
       if (existing && existing.status === "pending" && fax.kroll_patient?.dob && fax.kroll_patient.status !== "none" && !existing.patient.dob) updatePatient(existing.id, { dob: fax.kroll_patient.dob });
+      // A review screen made before extra medications were supported only has the first one: add the rest.
+      const faxMeds = fax.ocr?.scripts?.[0]?.medications ?? [];
+      if (existing && existing.status === "pending" && faxMeds.length > existing.medications.length) {
+        const more = faxMeds.slice(existing.medications.length).map((x) => ({
+          id: `med-${fax.mail_id}-${Math.random().toString(36).slice(2, 8)}`,
+          drug_name: x?.drug_name || "", din: x?.din || "", strength: x?.strength || "", quantity: Number(x?.quantity) || 0,
+          refills: Number(x?.refills) || 0, sig: x?.sig || "", is_compound: Boolean(x?.is_compound), confidence: 0.9, din_status: (x?.is_compound ? "compound" : "unverified") as "compound" | "unverified",
+          field_scores: { drug_name: 0.85, din: x?.din ? 0.9 : 0.2, strength: x?.strength ? 0.9 : 0.2, quantity: x?.quantity ? 0.95 : 0.3, refills: 0.9, sig: x?.sig ? 0.9 : 0.3 },
+        }));
+        updateScript(existing.id, { medications: [...existing.medications, ...more] });
+      }
       if (!en || !existing || existing.status !== "pending") return;
       if (en.fills?.doctor_name && existing.prescriber.name === fax.ocr?.scripts?.[0]?.prescriber?.name) updatePrescriber(existing.id, { name: en.fills.doctor_name });
       if (en.fills?.licence && !existing.prescriber.license_number) updatePrescriber(existing.id, { license_number: en.fills.licence });
-      const med = existing.medications[0];
-      if (en.fills?.din && med && !med.din) updateMedication(existing.id, med.id, { din: en.fills.din });
+      existing.medications.forEach((med, i) => {
+        const f = en.meds?.[i]?.din_fill || (i === 0 ? en.fills?.din : "");
+        if (f && !med.din) updateMedication(existing.id, med.id, { din: f });
+      });
     });
     rows.filter((f) => f.is_prescription !== false).forEach((fax) => {
       if (!firstSeen.current.has(fax.mail_id)) firstSeen.current.set(fax.mail_id, now);
@@ -265,7 +305,7 @@ export default function Intake() {
       if (!fax.kroll_patient && now - (firstSeen.current.get(fax.mail_id) ?? now) < 90000) return;
       scriptFor(fax, true);
     });
-  }, [rows, scripts, scriptFor, tab, updatePatient, updatePrescriber, updateMedication]);
+  }, [rows, scripts, scriptFor, tab, updatePatient, updatePrescriber, updateMedication, updateScript]);
 
   async function dismiss(fax: FaxRow) {
     if (!window.confirm("Remove this fax from the list? Use this when it is not a prescription.")) return;
@@ -377,6 +417,7 @@ export default function Intake() {
                 </p>
                 <p className="truncate text-xs text-muted-foreground">
                   {m?.sig || "no sig"} · Dr {s?.prescriber?.name || "?"}
+                  {(s?.medications?.length ?? 0) > 1 ? ` · +${(s?.medications?.length ?? 1) - 1} more medication${(s?.medications?.length ?? 0) > 2 ? "s" : ""}` : ""}
                 </p>
                 </>)}
                 {(() => {

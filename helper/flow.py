@@ -3178,51 +3178,72 @@ def enrich_fax(db: "KrollDB", script: Dict[str, Any], kp: Dict[str, Any]) -> Dic
                     out["fills"]["licence"] = kroll_lic
                 if status == "by_address" and dlast and _name_key(fax_last) != _name_key(dlast):     # the name on the fax is wrong: Kroll's is right
                     out["fills"]["doctor_name"] = f"{dfirst} {dlast}".strip()
-            # ---- drug
-            if med.get("drug_name") and not med.get("is_compound"):
-                cands = db.search_drugs(med.get("drug_name", ""), med.get("strength", ""))
-                pat_id = kp.get("pat_id") if kp and kp.get("status") in ("exact", "corrected", "ambiguous") else None
-                hist: Dict[Any, Dict[str, Any]] = {}
-                if cands and pat_id is not None and rx.get("rx_table") and rx.get("rx_pat_id") and rx.get("rx_drug_id"):
-                    marks = ",".join("?" for _ in cands)
-                    cols = ", ".join(f"{rx[k]} AS {k}" for k in ("rx_drug_id", "rx_sig", "rx_qty", "rx_refills", "rx_created") if rx.get(k))
-                    cur.execute(f"SELECT TOP 5 {cols} FROM {rx['rx_table']} WITH (NOLOCK) "
-                                f"WHERE {rx['rx_pat_id']} = ? AND {rx['rx_drug_id']} IN ({marks}) "
-                                f"ORDER BY {rx.get('rx_created') or rx['rx_id']} DESC", (pat_id, *[c["drug_id"] for c in cands]))
-                    for row in cur.fetchall():
-                        got = {c[0]: jsonable(v) for c, v in zip(cur.description, row)}
-                        hist.setdefault(got.get("rx_drug_id"), got)
-                out_c = []
-                for c in cands[:5]:
-                    h = hist.get(c["drug_id"])
-                    out_c.append({"din": c["din"], "name": c["name"], "uses": c.get("uses", 0), "in_history": bool(h)})
-                fax_din = re.sub(r"\D", "", str(med.get("din") or ""))
-                pick, reason = None, ""
-                in_hist = [c for c in out_c if c["in_history"]]
-                if fax_din and any(c["din"].lstrip("0") == fax_din.lstrip("0") for c in out_c):
-                    pick, reason = next(c["din"] for c in out_c if c["din"].lstrip("0") == fax_din.lstrip("0")), "DIN on the fax is a Kroll product"
-                elif len(out_c) == 1:
-                    pick, reason = out_c[0]["din"], "only matching product in Kroll"
-                elif len(in_hist) == 1:
-                    pick, reason = in_hist[0]["din"], "this patient got this product before"
-                elif len(in_hist) > 1:
-                    recent = next(iter(hist))
-                    pick, reason = next(c["din"] for c in cands if c["drug_id"] == recent), "the product this patient got most recently"
-                elif len(out_c) > 1 and out_c[0]["uses"] >= 3 and out_c[0]["uses"] >= 3 * max(out_c[1]["uses"], 1):
-                    pick, reason = out_c[0]["din"], f"the product this pharmacy dispenses most ({out_c[0]['uses']} in 12 months)"
-                out["drug"] = {"candidates": out_c, "pick": pick, "reason": reason}
-                if pick and not fax_din:
-                    out["fills"]["din"] = pick
-                if hist:
-                    best = next(iter(hist.values()))
-                    out["last_rx"] = {"din": next((c["din"] for c in cands if c["drug_id"] == best.get("rx_drug_id")), ""),
-                                      "sig": best.get("rx_sig"), "qty": best.get("rx_qty"), "refills": best.get("rx_refills"),
-                                      "filled": str(best.get("rx_created") or "")[:10]}
+            # ---- drugs: every medication on the fax, not just the first
+            meds_out = []
+            for m_ in (script.get("medications") or []):
+                try:
+                    d_, lr_, fd_ = _enrich_drug(db, cur, m_, kp)
+                except Exception as exc:  # noqa: BLE001
+                    d_, lr_, fd_ = {"candidates": [], "pick": None, "reason": ""}, None, ""
+                meds_out.append({"drug": d_, "last_rx": lr_, "din_fill": fd_})
+            out["meds"] = meds_out
+            if meds_out:
+                out["drug"], out["last_rx"] = meds_out[0]["drug"], meds_out[0]["last_rx"]
+                if meds_out[0]["din_fill"]:
+                    out["fills"]["din"] = meds_out[0]["din_fill"]
         finally:
             cur.close()
     except Exception as exc:  # noqa: BLE001
         out["error"] = str(exc)[:80]
     return out
+
+
+def _enrich_drug(db: "KrollDB", cur, med: Dict[str, Any], kp: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], str]:
+    """DIN candidates for one medication on the fax, the pick (if clear), the patient's last Rx of it, and the DIN to auto-fill."""
+    rx = db.cfg.rx_schema
+    empty = {"candidates": [], "pick": None, "reason": ""}
+    if not med.get("drug_name") or med.get("is_compound"):
+        return empty, None, ""
+    last_rx = None
+    fill_din = ""
+    cands = db.search_drugs(med.get("drug_name", ""), med.get("strength", ""))
+    pat_id = kp.get("pat_id") if kp and kp.get("status") in ("exact", "corrected", "ambiguous") else None
+    hist: Dict[Any, Dict[str, Any]] = {}
+    if cands and pat_id is not None and rx.get("rx_table") and rx.get("rx_pat_id") and rx.get("rx_drug_id"):
+        marks = ",".join("?" for _ in cands)
+        cols = ", ".join(f"{rx[k]} AS {k}" for k in ("rx_drug_id", "rx_sig", "rx_qty", "rx_refills", "rx_created") if rx.get(k))
+        cur.execute(f"SELECT TOP 5 {cols} FROM {rx['rx_table']} WITH (NOLOCK) "
+                    f"WHERE {rx['rx_pat_id']} = ? AND {rx['rx_drug_id']} IN ({marks}) "
+                    f"ORDER BY {rx.get('rx_created') or rx['rx_id']} DESC", (pat_id, *[c["drug_id"] for c in cands]))
+        for row in cur.fetchall():
+            got = {c[0]: jsonable(v) for c, v in zip(cur.description, row)}
+            hist.setdefault(got.get("rx_drug_id"), got)
+    out_c = []
+    for c in cands[:5]:
+        h = hist.get(c["drug_id"])
+        out_c.append({"din": c["din"], "name": c["name"], "uses": c.get("uses", 0), "in_history": bool(h)})
+    fax_din = re.sub(r"\D", "", str(med.get("din") or ""))
+    pick, reason = None, ""
+    in_hist = [c for c in out_c if c["in_history"]]
+    if fax_din and any(c["din"].lstrip("0") == fax_din.lstrip("0") for c in out_c):
+        pick, reason = next(c["din"] for c in out_c if c["din"].lstrip("0") == fax_din.lstrip("0")), "DIN on the fax is a Kroll product"
+    elif len(out_c) == 1:
+        pick, reason = out_c[0]["din"], "only matching product in Kroll"
+    elif len(in_hist) == 1:
+        pick, reason = in_hist[0]["din"], "this patient got this product before"
+    elif len(in_hist) > 1:
+        recent = next(iter(hist))
+        pick, reason = next(c["din"] for c in cands if c["drug_id"] == recent), "the product this patient got most recently"
+    elif len(out_c) > 1 and out_c[0]["uses"] >= 3 and out_c[0]["uses"] >= 3 * max(out_c[1]["uses"], 1):
+        pick, reason = out_c[0]["din"], f"the product this pharmacy dispenses most ({out_c[0]['uses']} in 12 months)"
+    drug = {"candidates": out_c, "pick": pick, "reason": reason}
+    fill_din = pick if (pick and not fax_din) else ""
+    if hist:
+        best = next(iter(hist.values()))
+        last_rx = {"din": next((c["din"] for c in cands if c["drug_id"] == best.get("rx_drug_id")), ""),
+                          "sig": best.get("rx_sig"), "qty": best.get("rx_qty"), "refills": best.get("rx_refills"),
+                          "filled": str(best.get("rx_created") or "")[:10]}
+    return drug, last_rx, fill_din
 
 
 def kroll_match(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:

@@ -158,12 +158,49 @@ async function handleFaxResult(body, res, cfg) {
   return send(res, upd.ok ? 200 : 502, { ok: upd.ok, ...result });
 }
 
+/**
+ * Faxes read before the address / phone fields existed: read ONE of them again from the stored page image, add the
+ * missing fields (nothing already read is overwritten) and clear the Kroll lookups so the agent redoes them with the address.
+ */
+async function rereadOne(cfg, storeId) {
+  try {
+    const q = new URLSearchParams({
+      store_id: `eq.${storeId}`, is_prescription: "eq.true", status: "eq.new", "ocr->scripts->0->patient->>address": "is.null",
+      page_image_url: "like.private:*", select: "mail_id,ocr,page_image_url", order: "mail_id.desc", limit: "1",
+    });
+    const r = await fetch(`${cfg.url}/rest/v1/inbound_faxes?${q}`, { headers: sbHeaders(cfg.key) });
+    if (!r.ok) return;
+    const row = (await r.json())[0];
+    if (!row?.ocr?.scripts?.[0]) return;
+    const path = String(row.page_image_url).replace(/^private:/, "");
+    const img = await fetch(`${cfg.url}/storage/v1/object/rx-images/${path}`, { headers: { apikey: cfg.key, Authorization: `Bearer ${cfg.key}` } });
+    let again = null;
+    if (img.ok) {
+      const dataUrl = `data:${img.headers.get("content-type") || "image/jpeg"};base64,${Buffer.from(await img.arrayBuffer()).toString("base64")}`;
+      const { result, error } = await readFax(dataUrl);
+      if (error) return;                       // try again on the next poll
+      again = result?.scripts?.[0] || null;
+    }
+    const sc = row.ocr.scripts[0];
+    sc.patient = { ...(sc.patient || {}), address: String(again?.patient?.address || ""), dob: sc.patient?.dob || String(again?.patient?.dob || "") };
+    sc.prescriber = { ...(sc.prescriber || {}), address: String(again?.prescriber?.address || ""), phone: String(again?.prescriber?.phone || ""),
+      fax: String(again?.prescriber?.fax || ""), license_number: sc.prescriber?.license_number || String(again?.prescriber?.license_number || "") };
+    await fetch(`${cfg.url}/rest/v1/inbound_faxes?store_id=eq.${encodeURIComponent(storeId)}&mail_id=eq.${row.mail_id}`, {
+      method: "PATCH", headers: sbHeaders(cfg.key, { Prefer: "return=minimal" }),
+      body: JSON.stringify({ ocr: row.ocr, kroll_patient: null, kroll_enrich: null }),
+    });
+  } catch (e) {
+    console.warn("[agent-fax] reread failed", String(e?.message || e).slice(0, 120));
+  }
+}
+
 /** GET ?unresolved=N&store_id= -> new prescription faxes whose Kroll patient was not looked up yet (agent-only). */
 async function listUnresolved(req, res, cfg) {
   const q = new URL(req.url, "http://x").searchParams;
   const storeId = String(q.get("store_id") || "default").slice(0, 64);
   const n = Math.min(20, Math.max(1, Number(q.get("unresolved")) || 10));
   if (!cfg) return send(res, 200, { ok: true, items: [] });
+  await rereadOne(cfg, storeId);
   const params = new URLSearchParams({
     store_id: `eq.${storeId}`, is_prescription: "eq.true", status: "eq.new", kroll_enrich: "is.null",
     select: "mail_id,ocr", order: "mail_id.desc", limit: String(n),
@@ -201,7 +238,13 @@ async function handleKrollEnrich(body, res, cfg) {
   const cands = (Array.isArray(e.drug?.candidates) ? e.drug.candidates : []).slice(0, 5).map((c) => ({
     din: str(c.din, 12), name: str(c.name, 80), uses: Number(c.uses) || 0, in_history: Boolean(c.in_history),
   }));
+  const cleanDrug = (dr) => ({
+    candidates: (Array.isArray(dr?.candidates) ? dr.candidates : []).slice(0, 5).map((c) => ({ din: str(c.din, 12), name: str(c.name, 80), uses: Number(c.uses) || 0, in_history: Boolean(c.in_history) })),
+    pick: dr?.pick ? str(dr.pick, 12) : null, reason: str(dr?.reason, 80),
+  });
+  const cleanLast = (l) => (l ? { din: str(l.din, 12), sig: str(l.sig, 300), qty: l.qty ?? null, refills: l.refills ?? null, filled: str(l.filled, 10) } : null);
   const clean = {
+    meds: (Array.isArray(e.meds) ? e.meds : []).slice(0, 12).map((m) => ({ drug: cleanDrug(m?.drug), last_rx: cleanLast(m?.last_rx), din_fill: m?.din_fill ? str(m.din_fill, 12) : "" })),
     doctor: { status: ["found", "by_name", "by_address", "several", "none"].includes(d.status) ? d.status : "none", first: str(d.first, 40), last: str(d.last, 40),
               licence: str(d.licence, 20), name_ok: d.name_ok === true ? true : d.name_ok === false ? false : null },
     drug: { candidates: cands, pick: e.drug?.pick ? str(e.drug.pick, 12) : null, reason: str(e.drug?.reason, 80) },
