@@ -38,9 +38,9 @@ exit /b
 :havepy
 
 if not exist "%DEST%" mkdir "%DEST%"
-copy /Y "%~dp0workstation_helper.py" "%DEST%\workstation_helper.py" >nul
+copy /Y "%~dp0..\workstation_helper.py" "%DEST%\workstation_helper.py" >nul
 if errorlevel 1 (
-  echo  Could not find workstation_helper.py next to this file. Keep both files in the same folder.
+  echo  Could not find workstation_helper.py in the folder above. Extract the whole zip first.
   pause
   exit /b
 )

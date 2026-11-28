@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 title PharmFlow - set up a new pharmacy (Kroll server)
 net session >nul 2>nul
 if errorlevel 1 (
@@ -46,12 +46,14 @@ exit /b
 
 if not exist "%DEST%" mkdir "%DEST%"
 for %%F in (flow.py setup_server.py config.ini.example requirements.txt install_service.ps1) do (
-  if not exist "%~dp0%%F" (
-    echo  Missing file next to this one: %%F
+  set "SRCF=%~dp0..\%%F"
+  if "%%F"=="setup_server.py" set "SRCF=%~dp0%%F"
+  if not exist "!SRCF!" (
+    echo  Missing file: %%F
     pause
     exit /b
   )
-  copy /Y "%~dp0%%F" "%DEST%\%%F" >nul
+  copy /Y "!SRCF!" "%DEST%\%%F" >nul
 )
 
 cd /d "%DEST%"

@@ -18,7 +18,7 @@ if not defined AGENT (
 )
 echo  PharmFlow agent folder: %AGENT%
 cd /d "%AGENT%"
-copy /Y "%~dp0probe_patient_notes.py" "%AGENT%\probe_patient_notes.py" >nul
+copy /Y "%~dp0..\probe_patient_notes.py" "%AGENT%\probe_patient_notes.py" >nul
 "%PYX%" probe_patient_notes.py > patient_notes_probe.txt 2>&1
 echo.
 echo  Done. This only read table and column NAMES, no patient data.
