@@ -158,6 +158,38 @@ async function handleFaxResult(body, res, cfg) {
   return send(res, upd.ok ? 200 : 502, { ok: upd.ok, ...result });
 }
 
+/** GET ?unresolved=N&store_id= -> new prescription faxes whose Kroll patient was not looked up yet (agent-only). */
+async function listUnresolved(req, res, cfg) {
+  const q = new URL(req.url, "http://x").searchParams;
+  const storeId = String(q.get("store_id") || "default").slice(0, 64);
+  const n = Math.min(20, Math.max(1, Number(q.get("unresolved")) || 10));
+  if (!cfg) return send(res, 200, { ok: true, items: [] });
+  const params = new URLSearchParams({
+    store_id: `eq.${storeId}`, is_prescription: "eq.true", status: "eq.new", kroll_patient: "is.null",
+    select: "mail_id,ocr", order: "mail_id.desc", limit: String(n),
+  });
+  const resp = await fetch(`${cfg.url}/rest/v1/inbound_faxes?${params}`, { headers: sbHeaders(cfg.key) });
+  return send(res, resp.ok ? 200 : 502, { ok: resp.ok, items: resp.ok ? await resp.json() : [] });
+}
+
+/** POST { type:"kroll_patient", store_id, mail_id, kroll_patient:{status,pat_id,first,last,score,n_dob,dob_swapped} } */
+async function handleKrollPatient(body, res, cfg) {
+  const mailId = Number(body.mail_id);
+  if (!Number.isSafeInteger(mailId) || !cfg) return send(res, 400, { error: "mail_id required" });
+  const kp = body.kroll_patient || {};
+  const clean = {
+    status: ["exact", "corrected", "ambiguous", "none"].includes(kp.status) ? kp.status : "none",
+    pat_id: Number.isSafeInteger(Number(kp.pat_id)) ? Number(kp.pat_id) : null,
+    first: String(kp.first || "").slice(0, 60), last: String(kp.last || "").slice(0, 60),
+    score: Number(kp.score) || 0, n_dob: Number(kp.n_dob) || 0, dob_swapped: Boolean(kp.dob_swapped),
+  };
+  const storeId = String(body.store_id || "default").slice(0, 64);
+  const upd = await fetch(`${cfg.url}/rest/v1/inbound_faxes?store_id=eq.${encodeURIComponent(storeId)}&mail_id=eq.${mailId}`, {
+    method: "PATCH", headers: sbHeaders(cfg.key, { Prefer: "return=minimal" }), body: JSON.stringify({ kroll_patient: clean }),
+  });
+  return send(res, upd.ok ? 200 : 502, { ok: upd.ok });
+}
+
 /**
  * The agent reports which inbound faxes are still PENDING in Kroll (unread and not deleted for the recipient).
  * Faxes in the list become 'pending'; faxes received since `since_label` (Kroll server time) that are not in it
@@ -189,6 +221,7 @@ export default async function handler(req, res) {
   if (!keyMatches(req.headers["x-api-key"], expected)) return send(res, 401, { error: "Unauthorized" });
   if (req.method === "GET") {
     const q = new URL(req.url, "http://x").searchParams;
+    if (q.get("unresolved")) return listUnresolved(req, res, supabaseConfig());
     return q.get("recent") ? listRecentScripts(req, res, supabaseConfig()) : listPendingLearn(req, res, supabaseConfig());
   }
   if (req.method !== "POST") return send(res, 405, { error: "GET or POST only" });
@@ -196,6 +229,7 @@ export default async function handler(req, res) {
   if (typeof body === "string") {
     try { body = JSON.parse(body); } catch { return send(res, 400, { error: "Invalid JSON" }); }
   }
+  if (body?.type === "kroll_patient") return handleKrollPatient(body, res, supabaseConfig());
   if (body?.type === "kroll_pending") return handleKrollPending(body, res, supabaseConfig());
   if (body?.type === "fax_result") return handleFaxResult(body, res, supabaseConfig());
   const mailId = Number(body?.mail_id);

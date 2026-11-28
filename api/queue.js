@@ -122,7 +122,7 @@ export default async function handler(req, res) {
         // ?status=new (default) | pushed | dismissed
         const fstatus = ["new", "pushed", "dismissed"].includes(q.get("status")) ? q.get("status") : "new";
         const fr = await fetch(
-          `${url.replace(/\/$/, "")}/rest/v1/inbound_faxes?select=mail_id,store_id,received_label,from_label,doc_type,is_prescription,summary,ocr,page_image_url,status,pushed_at,learn_result,created_at&status=eq.${fstatus}${fstatus === "new" ? "&or=(kroll_state.is.null,kroll_state.eq.pending)" : "&is_prescription=eq.true"}&order=created_at.desc&limit=300`,
+          `${url.replace(/\/$/, "")}/rest/v1/inbound_faxes?select=mail_id,store_id,received_label,from_label,doc_type,is_prescription,summary,ocr,kroll_patient,page_image_url,status,pushed_at,learn_result,created_at&status=eq.${fstatus}${fstatus === "new" ? "&or=(kroll_state.is.null,kroll_state.eq.pending)" : "&is_prescription=eq.true"}&order=created_at.desc&limit=300`,
           { headers },
         );
         if (!fr.ok) return send(res, 500, { error: "Query failed" });

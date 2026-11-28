@@ -25,6 +25,7 @@ interface FaxRow {
   received_label: string | null;
   from_label: string | null;
   is_prescription?: boolean;
+  kroll_patient?: { status: "exact" | "corrected" | "ambiguous" | "none"; first: string; last: string; score: number; n_dob: number; dob_swapped: boolean } | null;
   doc_type?: string | null;
   summary?: string | null;
   page_image_url: string | null;
@@ -93,6 +94,7 @@ export default function Intake() {
   const [stats, setStats] = React.useState<FaxStats | null>(null);
   const [fresh, setFresh] = React.useState<Set<number>>(new Set());
   const knownNew = React.useRef<Set<number> | null>(null);
+  const firstSeen = React.useRef<Map<number, number>>(new Map());
 
   const base = settings.apiBaseUrl.replace(/\/$/, "");
   const headers = React.useMemo(
@@ -169,8 +171,11 @@ export default function Intake() {
       if (existing) return existing.id;
       const s = fax.ocr?.scripts?.[0];
       const m = s?.medications?.[0];
+      const kp = fax.kroll_patient;
+      const useKroll = kp && (kp.status === "exact" || kp.status === "corrected") && kp.last;
+      const faxName = s?.patient?.full_name || "UNKNOWN PATIENT";
       return createManualScript({
-        full_name: s?.patient?.full_name || "UNKNOWN PATIENT",
+        full_name: useKroll ? `${kp.last}, ${kp.first}` : faxName,
         dob: s?.patient?.dob || "",
         health_card_num: s?.patient?.health_card_num || "",
         prescriber_name: s?.prescriber?.name || "",
@@ -190,6 +195,8 @@ export default function Intake() {
         fax_received: fax.received_label ?? undefined,
         fax_from: fax.from_label ?? undefined,
         extra_flags: [
+          ...(useKroll && kp.status === "corrected" ? [`Name on the fax: "${faxName}". Kroll's patient with this date of birth is "${kp.first} ${kp.last}"${kp.dob_swapped ? " (date read with day and month swapped)" : ""} - check it is the same person`] : []),
+          ...(kp?.status === "ambiguous" ? [`${kp.n_dob} Kroll patients share this date of birth and none fits the name clearly - pick the patient yourself`] : []),
           ...(m?.sig_hint ? [`Staff usually change this sig to "${m.sig_hint.to}" (${m.sig_hint.hits}x) - check the dose and timing`] : []),
           ...(m?.sig_learned ? [`Sig was adjusted to match how staff usually write it - please confirm`] : []),
         ],
@@ -202,8 +209,13 @@ export default function Intake() {
   // New faxes become reviewable scripts by themselves, so "Next" in the review screen walks through the whole list.
   React.useEffect(() => {
     if (tab !== "new") return;
+    const now = Date.now();
     rows.filter((f) => f.is_prescription !== false).forEach((fax) => {
-      if (!scripts.some((s) => s.faxMailId === fax.mail_id)) scriptFor(fax, true);
+      if (!firstSeen.current.has(fax.mail_id)) firstSeen.current.set(fax.mail_id, now);
+      if (scripts.some((s) => s.faxMailId === fax.mail_id)) return;
+      // Wait up to 90 s for the agent to look the patient up in Kroll by date of birth (then the name is right from the start).
+      if (!fax.kroll_patient && now - (firstSeen.current.get(fax.mail_id) ?? now) < 90000) return;
+      scriptFor(fax, true);
     });
   }, [rows, scripts, scriptFor, tab]);
 

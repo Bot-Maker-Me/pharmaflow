@@ -1731,6 +1731,23 @@ class CloudClient:
         except (requests.RequestException, ValueError):
             return []
 
+    def get_unresolved_faxes(self, n: int = 10) -> List[Dict[str, Any]]:
+        try:
+            resp = self.session.get(self._sibling("agent-fax"), params={"unresolved": int(n), "store_id": self.cfg.store_id},
+                                    timeout=CLOUD_TIMEOUT_SEC)
+            return list(resp.json().get("items") or []) if resp.status_code == 200 else []
+        except (requests.RequestException, ValueError):
+            return []
+
+    def push_kroll_patient(self, mail_id: int, kp: Dict[str, Any]) -> bool:
+        try:
+            resp = self.session.post(self._sibling("agent-fax"), json={
+                "type": "kroll_patient", "store_id": self.cfg.store_id, "mail_id": int(mail_id), "kroll_patient": kp},
+                timeout=CLOUD_TIMEOUT_SEC)
+            return 200 <= resp.status_code < 300
+        except requests.RequestException:
+            return False
+
     def push_fax_result(self, payload: Dict[str, Any]) -> bool:
         try:
             resp = self.session.post(self._sibling("agent-fax"), json=payload, timeout=CLOUD_TIMEOUT_SEC)
@@ -2270,6 +2287,15 @@ class PharmFlowAgent:
                 self.log.info("Kroll Pending list: %d fax(es)", len(ids))
         except Exception as exc:                                 # never block fax reading on this
             self.log.warning("Could not read Kroll's pending list: %s", str(exc)[:120])
+        try:                                                     # who is the real Kroll patient on each new fax?
+            for item in self.cloud.get_unresolved_faxes(10):
+                script = ((item.get("ocr") or {}).get("scripts") or [{}])[0]
+                kp = resolve_patient(self.db, script)
+                if self.cloud.push_kroll_patient(int(item["mail_id"]), kp):
+                    self.log.info("Fax Mail=%s patient lookup by date of birth: %s (name fit %.2f, %d with that DOB)",
+                                  item["mail_id"], kp["status"], kp["score"], kp["n_dob"])
+        except Exception as exc:
+            self.log.warning("Patient lookup by date of birth failed: %s", str(exc)[:120])
         done = 0
         for fax in reversed(faxes):                              # oldest first
             if done >= INBOUND_FAX_PER_CYCLE:
@@ -2732,6 +2758,71 @@ def _iso_date(text: Any) -> str:
         except ValueError:
             continue
     return ""
+
+
+def _name_key(text: str) -> str:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z ]+", " ", t)).strip()
+
+
+def name_score(fax_name: str, first: str, last: str) -> float:
+    """0..1 how well the name read from the fax fits a Kroll patient (handles typos, swapped order, nicknames in brackets)."""
+    import difflib
+    a = _name_key(fax_name)
+    f, l = _name_key(first), _name_key(last)
+    if not a or not (f or l):
+        return 0.0
+    seq = max(difflib.SequenceMatcher(None, a, f"{f} {l}").ratio(), difflib.SequenceMatcher(None, a, f"{l} {f}").ratio())
+    toks = a.split()
+    parts = [x for x in (f, l) if x]
+    cover = sum(max(difflib.SequenceMatcher(None, p, t).ratio() for t in toks) for p in parts) / len(parts)
+    return round(max(seq, cover), 3)
+
+
+def resolve_patient(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
+    """Find the REAL Kroll patient for a fax when the name on it may be misspelt: everyone with that date of birth,
+    best name fit wins. status: exact | corrected | ambiguous | none. Read-only. Never raises."""
+    out: Dict[str, Any] = {"status": "none", "pat_id": None, "first": "", "last": "", "score": 0.0, "n_dob": 0, "dob_swapped": False}
+    try:
+        s = db.cfg.schema
+        patient = script.get("patient") or {}
+        fax_name = str(patient.get("full_name") or "")
+        dob = _iso_date(patient.get("dob"))
+        if not (dob and s.get("pat_table") and s.get("pat_dob")):
+            return out
+        dates = [(dob, False)]
+        y, m, d = dob.split("-")
+        if int(d) <= 12 and m != d:                       # day and month may be read the wrong way round
+            dates.append((f"{y}-{d}-{m}", True))
+        cur = db.ensure().cursor()
+        try:
+            for iso, swapped in dates:
+                cur.execute(f"SELECT TOP 50 {s['pat_id']}, {s['pat_first']}, {s['pat_last']} FROM {s['pat_table']} WITH (NOLOCK) "
+                            f"WHERE CAST({s['pat_dob']} AS date) = ?", (iso,))
+                rows = cur.fetchall()
+                if not rows:
+                    continue
+                scored = sorted(((name_score(fax_name, str(r[1] or ""), str(r[2] or "")), r) for r in rows), key=lambda x: -x[0])
+                best, row = scored[0]
+                second = scored[1][0] if len(scored) > 1 else 0.0
+                out.update({"n_dob": len(rows), "dob_swapped": swapped, "score": best,
+                            "pat_id": row[0], "first": str(row[1] or "").strip().title(), "last": str(row[2] or "").strip().title()})
+                if swapped and best < 0.6:                # a swapped date needs a clearly matching name
+                    out.update({"status": "none", "pat_id": None, "first": "", "last": ""})
+                    continue
+                if best >= 0.85 and best - second >= 0.05:
+                    out["status"] = "exact"
+                elif (len(rows) == 1 and best >= 0.4) or (best >= 0.6 and best - second >= 0.15):
+                    out["status"] = "corrected"
+                else:
+                    out["status"] = "ambiguous"
+                return out
+        finally:
+            cur.close()
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 def kroll_match(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
