@@ -119,7 +119,7 @@ export function KrollGuidedDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => (busy ? undefined : onOpenChange(next))}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-2xl grid-cols-[minmax(0,1fr)] overflow-y-auto overflow-x-hidden [&>*]:min-w-0">
         <DialogHeader>
           <DialogTitle>Enter into Kroll</DialogTitle>
           <DialogDescription>
@@ -138,15 +138,15 @@ export function KrollGuidedDialog({
 
         {isFax ? (
           <div className="border-2 border-foreground p-2.5">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1 break-words">
                 <p className="text-sm font-semibold">Open the fax in Kroll for me</p>
                 <p className="text-[11px] text-muted-foreground">
                   Kroll must be on Inbound Docs (Show: Pending). PharmFlow selects this fax, presses F2, picks "Use to process
                   prescription(s)" and Process, then types the patient and the doctor. Do not touch the mouse while it runs.
                 </p>
               </div>
-              <Button size="sm" disabled={!!busy || auto || offline} onClick={() => void runAuto()}>
+              <Button size="sm" className="shrink-0" disabled={!!busy || auto || offline} onClick={() => void runAuto()}>
                 {auto ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Do it
               </Button>
             </div>
@@ -170,13 +170,14 @@ export function KrollGuidedDialog({
             const result = results[step.id];
             return (
               <div key={step.id} className="border border-border p-2.5">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1 break-words">
                     <p className="text-sm font-semibold">{step.title}</p>
-                    <p className="font-data truncate text-xs">{value || "nothing to type"}</p>
+                    <p className="font-data line-clamp-2 break-all text-xs">{value || "nothing to type"}</p>
                   </div>
                   <Button
                     size="sm"
+                    className="shrink-0"
                     variant={result?.ok ? "outline" : "default"}
                     disabled={!!busy || offline || !value}
                     onClick={() => void run(step.id)}
@@ -202,7 +203,7 @@ export function KrollGuidedDialog({
           })}
         </div>
 
-        <DialogFooter className="items-center gap-3 sm:justify-between">
+        <DialogFooter className="items-center gap-3 sm:justify-between [&>p]:min-w-0 [&>p]:break-words">
           <p className="text-[11px] text-muted-foreground">
             Check the patient notes in Kroll before you add the Rx. Press Add in Kroll yourself, then press Finished.
           </p>
