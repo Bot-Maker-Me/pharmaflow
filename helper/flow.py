@@ -2879,6 +2879,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"raw rows containing {word!r}:")
             for row in cur.fetchall():
                 print("  ", " | ".join(str(v) for v in row))
+            # Which column of the drug table holds the generic name? Columns and sample drug names only (no patient data).
+            tbl = ds["drug_table"].split(".")[-1]
+            cur.execute("SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?", (tbl,))
+            cols = cur.fetchall()
+            print(f"columns of {tbl}:", ", ".join(f"{c[0]}:{c[1]}" for c in cols))
+            for c in cols:
+                if c[1] in ("varchar", "nvarchar", "char") and IDENT_RE.match(c[0]):
+                    try:
+                        cur.execute(f"SELECT COUNT(*) FROM {ds['drug_table']} WITH (NOLOCK) WHERE [{c[0]}] LIKE ?", (f"%{word[:6]}%",))
+                        print(f"  column {c[0]}: {cur.fetchone()[0]} row(s) containing {word[:6]!r}")
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"  column {c[0]}: error {str(exc)[:60]}")
+            cur.execute(f"SELECT COUNT(*) FROM {ds['drug_table']} WITH (NOLOCK)")
+            print("rows in drug table:", cur.fetchone()[0])
+            cur.execute(f"SELECT TOP 12 [{ds['drug_id']}], [{ds['drug_din']}], [{ds['drug_name']}] FROM {ds['drug_table']} WITH (NOLOCK) "
+                        f"WHERE [{ds['drug_name']}] LIKE ? ORDER BY [{ds['drug_id']}] DESC", (f"{word[:1].upper()}%",))
+            print(f"sample drug names starting with {word[:1].upper()!r}:")
+            for row in cur.fetchall():
+                print("  ", " | ".join(str(v) for v in row))
         return 0
 
     if args.pending_test:
