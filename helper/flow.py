@@ -1334,6 +1334,38 @@ class KrollDB:
             parts.append(f"({pre}[{cols['MERGEDTOID']}] IS NULL OR {pre}[{cols['MERGEDTOID']}] = 0)")
         return (" AND " + " AND ".join(parts)) if parts else ""
 
+    def doc_contact_table(self) -> Optional[Dict[str, str]]:
+        """Kroll's doctor address / phone table: a table with a doctor-id column plus address, postal, phone or fax columns.
+        Found once from INFORMATION_SCHEMA and cached. None if there isn't one."""
+        if "_doc_contact" in self.__dict__:
+            return self.__dict__["_doc_contact"]
+        found: Optional[Dict[str, str]] = None
+        try:
+            cur = self.ensure().cursor()
+            try:
+                cur.execute("SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME LIKE 'Doc%'")
+                tabs: Dict[str, Dict[str, str]] = {}
+                for sch, tn, cn in cur.fetchall():
+                    tabs.setdefault(f"{sch}.{tn}", {})[str(cn).upper()] = str(cn)
+                best = -1
+                for tn, c in tabs.items():
+                    if "HID" in c:                                    # history copies
+                        continue
+                    idc = c.get("DOCID")
+                    if not idc:
+                        continue
+                    n = sum(1 for k in ("ADDRESS1", "POSTAL", "PHONE", "FAX") if k in c)
+                    if n > best and n >= 2:
+                        best = n
+                        found = {"table": tn, "doc_id": idc, "address": c.get("ADDRESS1", ""), "postal": c.get("POSTAL", ""),
+                                 "phone": c.get("PHONE", ""), "fax": c.get("FAX", "")}
+            finally:
+                cur.close()
+        except Exception as exc:  # noqa: BLE001
+            self.log.debug("doc_contact_table failed: %s", exc)
+        self.__dict__["_doc_contact"] = found
+        return found
+
     def search_drugs(self, drug_name: str, strength: str = "") -> List[Dict[str, Any]]:
         """Kroll drugs matching name + strength, most-dispensed first. Empty list if unavailable."""
         ds = self._resolve_drug_schema()
@@ -2841,6 +2873,120 @@ def _name_parts_score(fax_name: str, first: str, last: str) -> float:
     return round(0.6 * lb + 0.4 * fb, 3)
 
 
+def _postal(text: Any) -> str:
+    m = re.search(r"[A-Za-z]\d[A-Za-z]\s*-?\s*\d[A-Za-z]\d", str(text or ""))
+    return re.sub(r"[^A-Z0-9]", "", m.group(0).upper()) if m else ""
+
+
+def _phone10(text: Any) -> str:
+    d = re.sub(r"\D", "", str(text or ""))
+    return d[-10:] if len(d) >= 10 else ""
+
+
+def addr_score(fax_addr: Any, street: Any, city: Any = "", postal: Any = "") -> float:
+    """0..1 how well an address read from the fax fits a Kroll address: postal code, street number, street name."""
+    import difflib
+    fa = str(fax_addr or "")
+    if not fa.strip():
+        return 0.0
+    score = 0.0
+    fp, kp_ = _postal(fa), _postal(postal) or _postal(street)
+    if fp and kp_:
+        score += 0.5 if fp == kp_ else (0.15 if fp[:3] == kp_[:3] else 0.0)
+    fnum = re.search(r"\b(\d+[A-Za-z]?)\b", re.sub(_POSTAL_RE, " ", fa))
+    knum = re.search(r"\b(\d+[A-Za-z]?)\b", str(street or ""))
+    fwords = [w for w in _name_key(re.sub(_POSTAL_RE, " ", fa)).split() if len(w) > 2 and w not in ("street", "avenue", "road", "drive", "unit", "apt", "suite", "ontario", "canada")]
+    kwords = [w for w in _name_key(street).split() if len(w) > 2 and w not in ("street", "avenue", "road", "drive", "unit", "apt", "suite")]
+    if fnum and knum and fnum.group(1).lower() == knum.group(1).lower():
+        score += 0.25
+    if fwords and kwords:
+        score += 0.25 * max(difflib.SequenceMatcher(None, a, b).ratio() for a in fwords for b in kwords)
+    return round(min(score, 1.0), 3)
+
+
+_POSTAL_RE = r"[A-Za-z]\d[A-Za-z]\s*-?\s*\d[A-Za-z]\d"
+
+
+def _pat_extra(db: "KrollDB", cur, ids: List[Any]) -> Dict[Any, Tuple[str, str, str, str]]:
+    """{pat_id: (address1, city, postal, birthday ISO)} for a few patients (read-only)."""
+    s = db.cfg.schema
+    cols = db.columns(s["pat_table"]) if hasattr(db, "columns") else {}
+    sel = [f"[{cols[c]}]" if c in cols else "NULL" for c in ("ADDRESS1", "CITY", "POSTAL")]
+    out: Dict[Any, Tuple[str, str, str, str]] = {}
+    if not ids:
+        return out
+    marks = ",".join("?" for _ in ids)
+    cur.execute(f"SELECT {s['pat_id']}, {', '.join(sel)}, {s['pat_dob']} FROM {s['pat_table']} WITH (NOLOCK) WHERE {s['pat_id']} IN ({marks})", tuple(ids))
+    for r in cur.fetchall():
+        b = r[4]
+        out[r[0]] = (str(r[1] or ""), str(r[2] or ""), str(r[3] or ""), b.date().isoformat() if hasattr(b, "date") else str(b or "")[:10])
+    return out
+
+
+def _resolve_without_dob(db: "KrollDB", script: Dict[str, Any], out: Dict[str, Any]) -> Dict[str, Any]:
+    """No (usable) date of birth on the fax: find the patient from the NAME and the ADDRESS together, active profiles only.
+    Family members share an address, so an address alone is never enough: the name has to fit too."""
+    s = db.cfg.schema
+    patient = script.get("patient") or {}
+    fax_name = str(patient.get("full_name") or "")
+    fax_addr = str(patient.get("address") or "")
+    if not (fax_name.strip() or fax_addr.strip()) or not s.get("pat_table"):
+        return out
+    act = db.active_clause(s["pat_table"]) if hasattr(db, "active_clause") else ""
+    cols = db.columns(s["pat_table"]) if hasattr(db, "columns") else {}
+    ids: List[Any] = []
+    cur = db.ensure().cursor()
+    try:
+        first, last = split_patient_name(fax_name)
+        if last:
+            cur.execute(f"SELECT TOP 60 {s['pat_id']} FROM {s['pat_table']} WITH (NOLOCK) WHERE {s['pat_last']} LIKE ?{act}", (last[:3] + "%",))
+            ids += [r[0] for r in cur.fetchall()]
+        fp = _postal(fax_addr)
+        if fp and "POSTAL" in cols:
+            cur.execute(f"SELECT TOP 60 {s['pat_id']} FROM {s['pat_table']} WITH (NOLOCK) WHERE REPLACE([{cols['POSTAL']}], ' ', '') = ?{act}", (fp,))
+            ids += [r[0] for r in cur.fetchall()]
+        ids = list(dict.fromkeys(ids))[:100]
+        if not ids:
+            return out
+        marks = ",".join("?" for _ in ids)
+        cur.execute(f"SELECT {s['pat_id']}, {s['pat_first']}, {s['pat_last']} FROM {s['pat_table']} WITH (NOLOCK) WHERE {s['pat_id']} IN ({marks})", tuple(ids))
+        people = cur.fetchall()
+        extra = _pat_extra(db, cur, [r[0] for r in people])
+    finally:
+        cur.close()
+    scored = []
+    for r in people:
+        a1, city, postal, bday = extra.get(r[0], ("", "", "", ""))
+        ns = name_score(fax_name, str(r[1] or ""), str(r[2] or "")) if fax_name.strip() else 0.0
+        ad = addr_score(fax_addr, a1, city, postal) if fax_addr.strip() else 0.0
+        scored.append((ns, ad, r, bday))
+    # accepted only when the name fits AND (the address fits, or there is no address on the fax and the name is near exact)
+    def ok(x):
+        ns, ad, _, _ = x
+        if ad >= 0.7 and ns >= 0.5:
+            return True
+        if ns >= 0.9 and (ad >= 0.4 or not fax_addr.strip()):
+            return True
+        return False
+    good = sorted([x for x in scored if ok(x)], key=lambda x: -(x[0] + x[1]))
+    if not good:
+        best = sorted(scored, key=lambda x: -(x[0] + x[1]))[:3]
+        if best and best[0][0] >= 0.4 and best[0][0] + best[0][1] >= 0.9:
+            ns, ad, r, bday = best[0]
+            out.update({"status": "ambiguous", "pat_id": r[0], "first": str(r[1] or "").strip().title(), "last": str(r[2] or "").strip().title(),
+                        "score": round(max(ns, ad), 3), "n_dob": 0, "dob": bday, "matched_by": "name+address",
+                        "candidates": [{"first": str(x[2][1] or "").strip().title(), "last": str(x[2][2] or "").strip().title(), "score": round(x[0], 3)} for x in best]})
+        return out
+    ns, ad, r, bday = good[0]
+    gap = ns - good[1][0] if len(good) > 1 else 1.0       # does the NAME tell the candidates apart (family at one address)?
+    status = "exact" if (ns >= 0.95 and gap >= 0.1) else ("corrected" if gap >= 0.1 else "ambiguous")
+    by = "address" if (ns < 0.9 and ad >= 0.7) else ("name+address" if ad >= 0.4 else "name")
+    out.update({"status": status, "pat_id": r[0], "first": str(r[1] or "").strip().title(), "last": str(r[2] or "").strip().title(),
+                "score": round(max(ns, ad), 3), "n_dob": 0, "dob": bday, "matched_by": by,
+                "candidates": [{"first": str(x[2][1] or "").strip().title(), "last": str(x[2][2] or "").strip().title(), "score": round(x[0], 3)} for x in good[:3]]})
+    return out
+
+
 def resolve_patient(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
     """Find the REAL Kroll patient for a fax when the name on it may be misspelt: everyone with that date of birth,
     best name fit wins. status: exact | corrected | ambiguous | none. Read-only. Never raises."""
@@ -2850,8 +2996,10 @@ def resolve_patient(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
         patient = script.get("patient") or {}
         fax_name = str(patient.get("full_name") or "")
         dob = _iso_date(patient.get("dob"))
-        if not (dob and s.get("pat_table") and s.get("pat_dob")):
+        if not (s.get("pat_table") and s.get("pat_dob")):
             return out
+        if not dob:
+            return _resolve_without_dob(db, script, out)
         dates = [(dob, False)]
         y, m, d = dob.split("-")
         if int(d) <= 12 and m != d:                       # day and month may be read the wrong way round
@@ -2878,7 +3026,13 @@ def resolve_patient(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
                     if _name_parts_score(fax_name, str(top[1][1] or ""), str(top[1][2] or "")) - \
                             _name_parts_score(fax_name, str(nxt[1][1] or ""), str(nxt[1][2] or "")) >= 0.1:
                         row, best, second, tie_broken = top[1], top[0], 0.0, True
-                    else:
+                    elif str(patient.get("address") or "").strip() and hasattr(db, "columns"):
+                        # same DOB, near-identical names: the address on the fax decides
+                        ex = _pat_extra(db, cur, [x[1][0] for x in tied[:4]])
+                        ads = sorted(((addr_score(patient.get("address"), *ex.get(x[1][0], ("", "", ""))[:3]), x) for x in tied[:4]), key=lambda a: -a[0])
+                        if ads[0][0] >= 0.6 and ads[0][0] - (ads[1][0] if len(ads) > 1 else 0) >= 0.3:
+                            row, best, second, tie_broken = ads[0][1][1], ads[0][1][0], 0.0, True
+                    if not tie_broken:
                         r = db.cfg.rx_schema
                         if r.get("rx_table") and r.get("rx_pat_id"):
                             counts = []
@@ -2890,7 +3044,7 @@ def resolve_patient(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
                             counts.sort(key=lambda x: -x[0])
                             if counts[0][0] > 0 and counts[0][0] >= 2 * max(counts[1][0], 1) - 1 and counts[0][0] > counts[1][0]:
                                 row, best, second, tie_broken = counts[0][2], counts[0][1], 0.0, True
-                out.update({"n_dob": len(rows), "dob_swapped": swapped, "score": best, "tie_broken": tie_broken,
+                out.update({"n_dob": len(rows), "dob_swapped": swapped, "score": best, "tie_broken": tie_broken, "dob": iso, "matched_by": "dob",
                             "pat_id": row[0], "first": str(row[1] or "").strip().title(), "last": str(row[2] or "").strip().title(),
                             "candidates": [{"first": str(x[1][1] or "").strip().title(), "last": str(x[1][2] or "").strip().title(),
                                             "score": x[0]} for x in scored[:3]]})
@@ -2903,7 +3057,10 @@ def resolve_patient(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
                     out["status"] = "corrected"
                 else:
                     out["status"] = "ambiguous"
-                return out
+                break
+            if out["status"] == "none":              # nobody with that date of birth fits: try the name + address
+                return _resolve_without_dob(db, script, out)
+            return out
         finally:
             cur.close()
     except Exception:  # noqa: BLE001
@@ -2960,12 +3117,49 @@ def enrich_fax(db: "KrollDB", script: Dict[str, Any], kp: Dict[str, Any]) -> Dic
                     how = "name"
                     if ids:
                         break
+            # Name wrong / not found, or several doctors share it: the clinic's phone, fax and address on the fax decide.
+            dc = db.doc_contact_table() if (hasattr(db, "doc_contact_table") and s.get("doc_table")) else None
+            fax_phones = [x for x in (_phone10(doc.get("phone")), _phone10(doc.get("fax"))) if x]
+            fax_addr = str(doc.get("address") or "")
+            by_addr = False
+            if dc and (fax_phones or _postal(fax_addr)) and not (how == "licence" and ids) and (not ids or len(ids) > 1):
+                conds, prm2 = [], []
+                for ph in fax_phones:
+                    for col in (dc["phone"], dc["fax"]):
+                        if col:
+                            conds.append("REPLACE(REPLACE(REPLACE(REPLACE(REPLACE([%s], '-', ''), ' ', ''), '(', ''), ')', ''), '.', '') LIKE ?" % col)
+                            prm2.append("%" + ph)
+                if _postal(fax_addr) and dc["postal"]:
+                    conds.append("REPLACE([%s], ' ', '') = ?" % dc["postal"])
+                    prm2.append(_postal(fax_addr))
+                if conds:
+                    q = (f"SELECT TOP 8 {s['doc_id']} FROM {s['doc_table']} WITH (NOLOCK) WHERE {s['doc_id']} IN "
+                         f"(SELECT [{dc['doc_id']}] FROM {dc['table']} WITH (NOLOCK) WHERE {' OR '.join(conds)}){dact}")
+                    if ids:                                   # narrow the name matches
+                        q += f" AND {s['doc_id']} IN ({','.join('?' for _ in ids)})"
+                        prm2 += list(ids)
+                    cur.execute(q, tuple(prm2))
+                    cand = [r[0] for r in cur.fetchall()]
+                    if cand and ids and len(cand) < len(ids):
+                        ids, how, by_addr = cand, "name", True
+                    elif cand and not ids:
+                        # nothing matched by name: take the clinic's doctors, best name fit first (a wrong name still resembles)
+                        scored_d = []
+                        for did in cand:
+                            cur.execute(f"SELECT TOP 1 {s['doc_first']}, {s['doc_last']} FROM {s['doc_table']} WITH (NOLOCK) WHERE {s['doc_id']} = ?", (did,))
+                            rr = cur.fetchone()
+                            scored_d.append((name_score(fax_last or str(doc.get("name") or ""), "", str(rr[1] or "")) if rr else 0.0, did))
+                        scored_d.sort(reverse=True)
+                        if len(cand) == 1 and (scored_d[0][0] >= 0.4 or not fax_last):
+                            ids, how, by_addr = [scored_d[0][1]], "address", True
+                        elif scored_d[0][0] >= 0.5 and (len(scored_d) == 1 or scored_d[0][0] - scored_d[1][0] >= 0.15):
+                            ids, how, by_addr = [scored_d[0][1]], "address", True
             if len(ids) >= 1 and s.get("doc_table"):
                 cur.execute(f"SELECT TOP 1 {s['doc_first']}, {s['doc_last']} FROM {s['doc_table']} WITH (NOLOCK) WHERE {s['doc_id']} = ?", (ids[0],))
                 r = cur.fetchone()
                 dfirst, dlast = (str(r[0] or "").strip().title(), str(r[1] or "").strip().title()) if r else ("", "")
                 kroll_lic = lic if how == "licence" else ""
-                if how == "name" and len(ids) == 1:
+                if how in ("name", "address") and len(ids) == 1:
                     if s.get("lic_table") and s.get("lic_num"):
                         cur.execute(f"SELECT TOP 1 {s['lic_num']} FROM {s['lic_table']} WITH (NOLOCK) WHERE {s['lic_doc_id']} = ?", (ids[0],))
                         r2 = cur.fetchone()
@@ -2977,11 +3171,13 @@ def enrich_fax(db: "KrollDB", script: Dict[str, Any], kp: Dict[str, Any]) -> Dic
                 name_ok = None
                 if fax_last and dlast:
                     name_ok = name_score(fax_last, "", dlast) >= 0.8
-                status = "found" if how == "licence" else ("by_name" if len(ids) == 1 else "several")
+                status = "found" if how == "licence" else ("by_address" if (how == "address" or by_addr) and len(ids) == 1 else ("by_name" if len(ids) == 1 else "several"))
                 out["doctor"] = {"status": status, "doc_id": ids[0] if len(ids) == 1 or how == "licence" else None,
                                  "first": dfirst, "last": dlast, "licence": kroll_lic, "name_ok": name_ok}
-                if how == "name" and len(ids) == 1 and kroll_lic and not lic:
+                if how in ("name", "address") and len(ids) == 1 and kroll_lic and not lic:
                     out["fills"]["licence"] = kroll_lic
+                if status == "by_address" and dlast and _name_key(fax_last) != _name_key(dlast):     # the name on the fax is wrong: Kroll's is right
+                    out["fills"]["doctor_name"] = f"{dfirst} {dlast}".strip()
             # ---- drug
             if med.get("drug_name") and not med.get("is_compound"):
                 cands = db.search_drugs(med.get("drug_name", ""), med.get("strength", ""))

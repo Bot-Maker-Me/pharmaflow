@@ -19,8 +19,8 @@ function send(res, status, body) {
 }
 
 const FAX_PROMPT = `You read one fax received by a Canadian pharmacy. Return JSON only (no markdown):
-{"doc_type":"prescription|refill_request|transfer|other","is_prescription":false,"summary":"max 12 words on what kind of fax this is, never any person names","scripts":[{"patient":{"full_name":"","dob":"YYYY-MM-DD","health_card_num":"","confidence":0.0},"prescriber":{"name":"","license_number":"","confidence":0.0},"medications":[{"drug_name":"","din":"","strength":"","quantity":0,"refills":0,"sig":"","is_compound":false,"confidence":0.0}],"overall_confidence":0.0}]}
-is_prescription is true only for a new prescription or a refill/renewal authorization for a patient. Advertisements, flyers, reports, cover sheets, lab results and anything without a prescription are doc_type "other" with scripts []. DIN is 8 digits. Empty strings when unreadable.`;
+{"doc_type":"prescription|refill_request|transfer|other","is_prescription":false,"summary":"max 12 words on what kind of fax this is, never any person names","scripts":[{"patient":{"full_name":"","dob":"YYYY-MM-DD","address":"street, city, postal code as printed","health_card_num":"","confidence":0.0},"prescriber":{"name":"","license_number":"","address":"clinic street, city, postal code from the letterhead","phone":"","fax":"","confidence":0.0},"medications":[{"drug_name":"","din":"","strength":"","quantity":0,"refills":0,"sig":"","is_compound":false,"confidence":0.0}],"overall_confidence":0.0}]}
+is_prescription is true only for a new prescription or a refill/renewal authorization for a patient. Advertisements, flyers, reports, cover sheets, lab results and anything without a prescription are doc_type "other" with scripts []. DIN is 8 digits. Empty strings when unreadable. Phone and fax are the prescriber clinic's own numbers from the letterhead or stamp, never the fax machine header line at the very top of the page. If the patient has no date of birth on the fax leave dob empty.`;
 
 async function readFax(dataUrl) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -181,7 +181,7 @@ async function handleKrollPatient(body, res, cfg) {
     status: ["exact", "corrected", "ambiguous", "none"].includes(kp.status) ? kp.status : "none",
     pat_id: Number.isSafeInteger(Number(kp.pat_id)) ? Number(kp.pat_id) : null,
     first: String(kp.first || "").slice(0, 60), last: String(kp.last || "").slice(0, 60),
-    score: Number(kp.score) || 0, n_dob: Number(kp.n_dob) || 0, dob_swapped: Boolean(kp.dob_swapped), tie_broken: Boolean(kp.tie_broken),
+    dob: /^\d{4}-\d{2}-\d{2}$/.test(String(kp.dob || "")) ? String(kp.dob) : "", matched_by: ["dob", "name", "address", "name+address"].includes(kp.matched_by) ? kp.matched_by : "", score: Number(kp.score) || 0, n_dob: Number(kp.n_dob) || 0, dob_swapped: Boolean(kp.dob_swapped), tie_broken: Boolean(kp.tie_broken),
     candidates: (Array.isArray(kp.candidates) ? kp.candidates : []).slice(0, 3).map((c) => ({ first: String(c.first || "").slice(0, 60), last: String(c.last || "").slice(0, 60), score: Number(c.score) || 0 })),
   };
   const storeId = String(body.store_id || "default").slice(0, 64);
@@ -202,11 +202,11 @@ async function handleKrollEnrich(body, res, cfg) {
     din: str(c.din, 12), name: str(c.name, 80), uses: Number(c.uses) || 0, in_history: Boolean(c.in_history),
   }));
   const clean = {
-    doctor: { status: ["found", "by_name", "several", "none"].includes(d.status) ? d.status : "none", first: str(d.first, 40), last: str(d.last, 40),
+    doctor: { status: ["found", "by_name", "by_address", "several", "none"].includes(d.status) ? d.status : "none", first: str(d.first, 40), last: str(d.last, 40),
               licence: str(d.licence, 20), name_ok: d.name_ok === true ? true : d.name_ok === false ? false : null },
     drug: { candidates: cands, pick: e.drug?.pick ? str(e.drug.pick, 12) : null, reason: str(e.drug?.reason, 80) },
     last_rx: e.last_rx ? { din: str(e.last_rx.din, 12), sig: str(e.last_rx.sig, 300), qty: e.last_rx.qty ?? null, refills: e.last_rx.refills ?? null, filled: str(e.last_rx.filled, 10) } : null,
-    fills: { ...(e.fills?.licence ? { licence: str(e.fills.licence, 20) } : {}), ...(e.fills?.din ? { din: str(e.fills.din, 12) } : {}) },
+    fills: { ...(e.fills?.licence ? { licence: str(e.fills.licence, 20) } : {}), ...(e.fills?.din ? { din: str(e.fills.din, 12) } : {}), ...(e.fills?.doctor_name ? { doctor_name: str(e.fills.doctor_name, 80) } : {}) },
   };
   const storeId = String(body.store_id || "default").slice(0, 64);
   const upd = await fetch(`${cfg.url}/rest/v1/inbound_faxes?store_id=eq.${encodeURIComponent(storeId)}&mail_id=eq.${mailId}`, {

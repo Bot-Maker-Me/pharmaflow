@@ -50,7 +50,7 @@ function sbHeaders(key, extra = {}) {
   return { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...extra };
 }
 
-const OCR_PROMPT = `Extract Canadian pharmacy fax to JSON only. Return {"scripts":[{ "patient":{"full_name":"","dob":"YYYY-MM-DD","health_card_num":"","confidence":0.0},"prescriber":{"name":"","license_number":"","confidence":0.0},"medications":[{"drug_name":"","din":"","strength":"","quantity":0,"refills":0,"sig":"","is_compound":false,"confidence":0.0}],"overall_confidence":0.0 }]}. DIN is 8 digits. Empty if unreadable. No markdown.`;
+const OCR_PROMPT = `Extract Canadian pharmacy fax to JSON only. Return {"scripts":[{ "patient":{"full_name":"","dob":"YYYY-MM-DD","address":"","health_card_num":"","confidence":0.0},"prescriber":{"name":"","license_number":"","address":"","phone":"","fax":"","confidence":0.0},"medications":[{"drug_name":"","din":"","strength":"","quantity":0,"refills":0,"sig":"","is_compound":false,"confidence":0.0}],"overall_confidence":0.0 }]}. DIN is 8 digits. Empty if unreadable. No markdown.`;
 
 async function runOcr(dataUrl) {
   const apiKey = process.env.ANTHROPIC_API_KEY;

@@ -25,12 +25,12 @@ interface FaxRow {
   received_label: string | null;
   from_label: string | null;
   is_prescription?: boolean;
-  kroll_patient?: { status: "exact" | "corrected" | "ambiguous" | "none"; first: string; last: string; score: number; n_dob: number; dob_swapped: boolean; tie_broken?: boolean; candidates?: Array<{ first: string; last: string; score: number }> } | null;
+  kroll_patient?: { status: "exact" | "corrected" | "ambiguous" | "none"; first: string; last: string; score: number; n_dob: number; dob_swapped: boolean; dob?: string; matched_by?: "dob" | "name" | "address" | "name+address"; tie_broken?: boolean; candidates?: Array<{ first: string; last: string; score: number }> } | null;
   kroll_enrich?: {
-    doctor?: { status: "found" | "by_name" | "several" | "none"; first: string; last: string; licence: string; name_ok: boolean | null };
+    doctor?: { status: "found" | "by_name" | "by_address" | "several" | "none"; first: string; last: string; licence: string; name_ok: boolean | null };
     drug?: { candidates: Array<{ din: string; name: string; uses: number; in_history: boolean }>; pick: string | null; reason: string };
     last_rx?: { din: string; sig: string; qty: number | null; refills: number | null; filled: string } | null;
-    fills?: { licence?: string; din?: string };
+    fills?: { licence?: string; din?: string; doctor_name?: string };
   } | null;
   doc_type?: string | null;
   summary?: string | null;
@@ -40,8 +40,8 @@ interface FaxRow {
   learn_result: { found?: boolean; learned?: boolean } | null;
   ocr: {
     scripts?: Array<{
-      patient?: { full_name?: string; dob?: string; health_card_num?: string };
-      prescriber?: { name?: string; license_number?: string };
+      patient?: { full_name?: string; dob?: string; address?: string; health_card_num?: string };
+      prescriber?: { name?: string; license_number?: string; address?: string; phone?: string; fax?: string };
       medications?: FaxMed[];
       overall_confidence?: number;
     }>;
@@ -184,13 +184,14 @@ export default function Intake() {
       const faxDin = (m?.din || "").replace(/\D/g, "");
       const fillDin = !faxDin && en?.fills?.din ? en.fills.din : "";
       const fillLic = !s?.prescriber?.license_number && en?.fills?.licence ? en.fills.licence : "";
+      const fillDoc = en?.fills?.doctor_name || "";
       const lr = en?.last_rx;
       const dr = en?.doctor;
       return createManualScript({
         full_name: useKroll ? `${kp.last}, ${kp.first}` : faxName,
-        dob: s?.patient?.dob || "",
+        dob: s?.patient?.dob || (useKroll ? kp.dob || "" : ""),
         health_card_num: s?.patient?.health_card_num || "",
-        prescriber_name: s?.prescriber?.name || "",
+        prescriber_name: fillDoc || s?.prescriber?.name || "",
         license_number: s?.prescriber?.license_number || fillLic,
         drug_name: m?.drug_name || "",
         din: m?.din || fillDin,
@@ -211,9 +212,12 @@ export default function Intake() {
         fax_received: fax.received_label ?? undefined,
         fax_from: fax.from_label ?? undefined,
         extra_flags: [
-          ...(useKroll && kp.status === "corrected" ? [`Name on the fax: "${faxName}". Kroll's patient with this date of birth is "${kp.first} ${kp.last}"${kp.dob_swapped ? " (date read with day and month swapped)" : ""} - check it is the same person`] : []),
+          ...(useKroll && kp.status === "corrected" ? [`Name on the fax: "${faxName}". Kroll's patient with this date of birth is "${kp.first} ${kp.last}"${kp.dob_swapped ? " (date read with day and month swapped)" : ""}${kp.matched_by && kp.matched_by !== "dob" ? ` - found by ${kp.matched_by}` : ""} - check it is the same person`] : []),
           ...(kp?.status === "ambiguous" ? [`${kp.n_dob} Kroll patients share this date of birth (${(kp.candidates ?? []).map((c) => `${c.first} ${c.last}`).join(" / ")}). Best guess used: ${kp.first} ${kp.last} - check it in Kroll's patient list`] : []),
           ...(kp?.tie_broken ? [`Two Kroll patients fit this name and date of birth; chose ${kp.first} ${kp.last} (full name on the fax, or the one with recent prescriptions) - check it`] : []),
+          ...(useKroll && !s?.patient?.dob && kp.dob ? [`No date of birth on the fax: ${kp.dob} taken from Kroll (patient matched by ${kp.matched_by === "address" ? "address" : "name and address"}) - check it is the same person`] : []),
+          ...(useKroll && s?.patient?.dob && kp.dob && kp.matched_by !== "dob" && kp.dob !== s.patient.dob ? [`Date of birth on the fax (${s.patient.dob}) differs from Kroll (${kp.dob}) - check the patient`] : []),
+          ...(fillDoc ? [`Doctor name on the fax ("${s?.prescriber?.name}") replaced by Kroll's "${fillDoc}", found by the clinic's phone / fax / address - check it`] : []),
           ...(fillLic ? [`Licence ${fillLic} filled in from Kroll (Dr ${dr?.first} ${dr?.last}, found by name) - the fax had none`] : []),
           ...(fillDin ? [`DIN ${fillDin} filled in from Kroll (${en?.drug?.reason}) - check it is the product you want`] : []),
           ...(dr?.status === "found" && dr.name_ok === false ? [`Licence on the fax belongs to Dr ${dr.first} ${dr.last} in Kroll, but the fax says "${s?.prescriber?.name}" - check the doctor`] : []),
@@ -247,7 +251,9 @@ export default function Intake() {
     rows.forEach((fax) => {
       const en = fax.kroll_enrich;
       const existing = scripts.find((x) => x.faxMailId === fax.mail_id);
+      if (existing && existing.status === "pending" && fax.kroll_patient?.dob && fax.kroll_patient.status !== "none" && !existing.patient.dob) updatePatient(existing.id, { dob: fax.kroll_patient.dob });
       if (!en || !existing || existing.status !== "pending") return;
+      if (en.fills?.doctor_name && existing.prescriber.name === fax.ocr?.scripts?.[0]?.prescriber?.name) updatePrescriber(existing.id, { name: en.fills.doctor_name });
       if (en.fills?.licence && !existing.prescriber.license_number) updatePrescriber(existing.id, { license_number: en.fills.licence });
       const med = existing.medications[0];
       if (en.fills?.din && med && !med.din) updateMedication(existing.id, med.id, { din: en.fills.din });
@@ -345,7 +351,7 @@ export default function Intake() {
                         {s?.patient?.dob ? <span className="ml-2 font-data text-xs font-normal text-muted-foreground">{s.patient.dob}</span> : null}
                         {matched && kp.status !== "ambiguous" ? (
                           <Badge variant={kp.status === "corrected" ? "warning" : "outline"} className="ml-2 align-middle" title="Name taken from Kroll, found by date of birth">
-                            {kp.status === "corrected" ? "Kroll name · matched by DOB" : "In Kroll"}
+                            {kp.status === "corrected" ? `Kroll name · matched by ${kp.matched_by && kp.matched_by !== "dob" ? kp.matched_by : "DOB"}` : "In Kroll"}
                           </Badge>
                         ) : null}
                         {kp?.status === "ambiguous" ? (
@@ -377,7 +383,7 @@ export default function Intake() {
                   const en = fax.kroll_enrich;
                   if (!en) return null;
                   const bits = [
-                    en.doctor?.status === "found" || en.doctor?.status === "by_name" ? `Dr ${en.doctor.first} ${en.doctor.last} in Kroll${en.doctor.status === "by_name" ? " (by name)" : ""}` : en.doctor?.status === "several" ? "Several matching doctors" : "Doctor not found in Kroll",
+                    en.doctor?.status === "found" || en.doctor?.status === "by_name" || en.doctor?.status === "by_address" ? `Dr ${en.doctor.first} ${en.doctor.last} in Kroll${en.doctor.status === "by_name" ? " (by name)" : en.doctor.status === "by_address" ? " (by clinic phone/address)" : ""}` : en.doctor?.status === "several" ? "Several matching doctors" : "Doctor not found in Kroll",
                     en.drug?.pick ? `DIN ${en.drug.pick} (${en.drug.reason})` : en.drug?.candidates?.length ? `${en.drug.candidates.length} products to pick from` : null,
                     en.last_rx ? `last Rx: ${en.last_rx.sig ?? "?"} · qty ${en.last_rx.qty ?? "?"}` : null,
                   ].filter(Boolean);
