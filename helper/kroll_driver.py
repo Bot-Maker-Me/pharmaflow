@@ -150,6 +150,71 @@ def _focus_main() -> None:
         top.set_focus()
 
 
+def _dpi_aware() -> None:
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def highlighted_rows(rows: List[Dict[str, Any]]) -> List[int]:
+    """Indexes of list rows drawn with Kroll's blue selection colour (read from the screen, so it is what a person sees)."""
+    try:
+        from PIL import ImageGrab
+    except ImportError:
+        return []
+    hits = []
+    for i, r in enumerate(rows):
+        try:
+            rc = r["ctrl"].rectangle()
+            x0, x1 = rc.left + 6, rc.left + min(rc.width(), 240)
+            y = (rc.top + rc.bottom) // 2
+            img = ImageGrab.grab(bbox=(x0, y - 2, x1, y + 3), all_screens=True).convert("RGB")
+            red, green, blue = img.resize((1, 1)).getpixel((0, 0))
+            if max(red, green, blue) - min(red, green, blue) > 70 and blue > red + 40:
+                hits.append(i)
+        except Exception:  # noqa: BLE001
+            continue
+    return hits
+
+
+def select_row(row: Dict[str, Any], log=print) -> bool:
+    """Make `row` the selected fax and PROVE it from the screen. Click first; if another row is highlighted, walk
+    there with the arrow keys; give up (False) if it still is not the one."""
+    from pywinauto.keyboard import send_keys
+
+    def same(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+        return a["date"] == b["date"] and a["desc"] == b["desc"]
+
+    for attempt in range(3):
+        rows = read_fax_rows()
+        order = sorted(range(len(rows)), key=lambda i: rows[i]["ctrl"].rectangle().top)   # top-to-bottom as shown
+        rows = [rows[i] for i in order]
+        idx = next((i for i, r in enumerate(rows) if same(r, row)), None)
+        if idx is None:
+            log("the fax is no longer in the list")
+            return False
+        marked = highlighted_rows(rows)
+        if marked == [idx]:
+            log(f"fax selected (row {idx + 1} of {len(rows)})")
+            return True
+        if attempt == 0 or not marked:
+            try:
+                _focus_main()
+                rc = rows[idx]["ctrl"].rectangle()
+                from pywinauto import mouse
+                mouse.click(button="left", coords=(rc.left + 40, (rc.top + rc.bottom) // 2))
+            except Exception as exc:  # noqa: BLE001
+                log(f"click failed: {str(exc)[:60]}")
+        else:
+            delta = idx - marked[0]
+            log(f"walking {delta:+d} row(s) with the arrow keys (row {marked[0] + 1} was highlighted)")
+            send_keys(("{DOWN}" if delta > 0 else "{UP}") * abs(delta))
+        time.sleep(0.7)
+    return False
+
+
 def open_fax_as_prescription(row: Dict[str, Any], log=print) -> Dict[str, Any]:
     """Select the row, F2, 'Use to process prescription(s)', Process. Stops when the Rx Dropoff Form is open."""
     from pywinauto.keyboard import send_keys
@@ -157,13 +222,10 @@ def open_fax_as_prescription(row: Dict[str, Any], log=print) -> Dict[str, Any]:
     def fail(step: str, why: str) -> Dict[str, Any]:
         return {"ok": False, "step": step, "error": why}
 
+    _dpi_aware()
     log("1/5 selecting the fax in Inbound Docs")
-    try:
-        _focus_main()
-        row["ctrl"].click_input()
-    except Exception as exc:  # noqa: BLE001
-        return fail("select", f"could not click the fax row: {str(exc)[:80]}")
-    time.sleep(0.6)
+    if not select_row(row, log):
+        return fail("select", "could not select the right fax (nothing was opened)")
 
     log("2/5 pressing F2")
     send_keys("{F2}")

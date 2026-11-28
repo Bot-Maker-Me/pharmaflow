@@ -3,7 +3,7 @@ title PharmFlow - test: open the newest pending fax in Kroll (stops at the Rx Dr
 cd /d C:\PharmFlow\helper
 copy /Y "%~dp0..\kroll_driver.py" "C:\PharmFlow\helper\kroll_driver.py" >nul
 echo  Installing a small tool (needs internet)...
-".venv\Scripts\python.exe" -m pip install -q pywinauto psutil
+".venv\Scripts\python.exe" -m pip install -q pywinauto psutil Pillow
 echo.
 echo  Before you press a key: open Kroll, click the Inbound Docs tile, Show: Pending.
 echo  This test selects the TOP fax, presses F2, picks "Use to process prescription(s)" and Process.
