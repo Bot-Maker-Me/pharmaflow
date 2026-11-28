@@ -156,6 +156,32 @@ export class LocalHelperClient {
     };
   }
 
+  /** Ask the helper to open an inbound fax in Kroll as a prescription (stops at the Rx Dropoff Form). */
+  async openFax(
+    helperUrl: string,
+    fax: { received: string; from: string },
+    helperToken = "",
+  ): Promise<{ ok: boolean; message: string }> {
+    const base = normaliseBase(helperUrl);
+    try {
+      const response = await fetchWithTimeout(
+        `${base}/kroll/open-fax`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(helperToken ? { "x-helper-token": helperToken } : {}) },
+          body: JSON.stringify(fax),
+        },
+        60000,
+      );
+      const body = (await response.json().catch(() => null)) as { message?: string } | null;
+      if (!response.ok) return { ok: false, message: body?.message ?? `Helper returned HTTP ${response.status}` };
+      return { ok: true, message: body?.message ?? "Done" };
+    } catch {
+      this.setStatus("offline");
+      return { ok: false, message: `Could not reach the helper at ${base}.` };
+    }
+  }
+
   /** Guided entry: POST one small step to the helper. */
   async sendStep(
     helperUrl: string,

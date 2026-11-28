@@ -86,20 +86,28 @@ def kroll_windows() -> List[Any]:
     return out
 
 
+def _walk(ctrl: Any, depth: int = 0):
+    yield ctrl
+    if depth > 40:
+        return
+    try:
+        kids = ctrl.children()
+    except Exception:  # noqa: BLE001
+        return
+    for k in kids:
+        yield from _walk(k, depth + 1)
+
+
 def find(auto_id: str = "", class_name: str = "") -> Optional[Any]:
-    """First control with this id / class in any Kroll window, or None."""
+    """First control with this id / class in any Kroll window, or None (plain tree walk: the same way the probe saw them)."""
     for w in kroll_windows():
-        try:
-            kw: Dict[str, str] = {}
-            if auto_id:
-                kw["auto_id"] = auto_id
-            if class_name:
-                kw["class_name"] = class_name
-            found = w.descendants(**kw)
-            if found:
-                return found[0]
-        except Exception:  # noqa: BLE001
-            continue
+        for c in _walk(w):
+            try:
+                info = c.element_info
+                if (auto_id and info.automation_id == auto_id) or (class_name and info.class_name == class_name):
+                    return c
+            except Exception:  # noqa: BLE001
+                continue
     return None
 
 
@@ -218,6 +226,7 @@ def main() -> int:
     rows = read_fax_rows()
     if not rows:
         print("Could not read Kroll's Inbound Docs list. Open Kroll to Inbound Docs (Show: Pending) first.")
+        print(f"(Kroll windows seen: {len(kroll_windows())}; list control found: {find(FAX_LIST_ID) is not None})")
         return 1
     print(f"{len(rows)} fax row(s) visible in the list.")
     if a.test_fax:

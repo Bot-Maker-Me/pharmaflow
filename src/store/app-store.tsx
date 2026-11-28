@@ -63,6 +63,8 @@ export interface ManualScriptInput {
   quiet?: boolean;
   /** Kroll dbo.Mail id of the inbound fax this script was read from. */
   fax_mail_id?: number;
+  fax_received?: string;
+  fax_from?: string;
   /** Extra "please check" lines shown on the review screen. */
   extra_flags?: string[];
 }
@@ -101,6 +103,7 @@ interface AppStoreValue {
     onStep: (step: KeystrokeStep, index: number, total: number) => void,
   ) => Promise<PushOutcome>;
   sendKrollStep: (scriptId: string, step: KrollStep) => Promise<{ ok: boolean; message: string }>;
+  openKrollFax: (scriptId: string) => Promise<{ ok: boolean; message: string }>;
   completeKrollPush: (scriptId: string) => void;
   createManualScript: (input: ManualScriptInput) => string;
   checkHelper: () => Promise<void>;
@@ -486,6 +489,13 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  /** Open the fax in Kroll's Inbound Docs as a prescription (so Kroll clears it from Pending). */
+  const openKrollFax = React.useCallback(async (scriptId: string): Promise<{ ok: boolean; message: string }> => {
+    const script = scriptsRef.current.find((c) => c.id === scriptId);
+    if (!script?.faxReceived) return { ok: false, message: "This script did not come from an inbound fax" };
+    return helperRef.current!.openFax(settingsRef.current.helperUrl, { received: script.faxReceived, from: script.faxFrom ?? "" }, settingsRef.current.helperToken);
+  }, []);
+
   /** Staff finished the entry in Kroll: mark the script and the fax as pushed. */
   const completeKrollPush = React.useCallback(
     (scriptId: string) => {
@@ -621,7 +631,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
         notes: source === "kroll_sql" ? `pending_rx_id=${input.pending_rx_id ?? ""}` : "",
         status: "pending",
         dinVerifiedCount: enriched.din_status === "verified" ? 1 : 0,
-        ...(input.fax_mail_id ? { faxMailId: input.fax_mail_id, faxStoreId: input.store_id } : {}),
+        ...(input.fax_mail_id ? { faxMailId: input.fax_mail_id, faxStoreId: input.store_id, faxReceived: input.fax_received, faxFrom: input.fax_from } : {}),
       };
       script.extractionSnapshot = snapshotFromScript(script);
       setDocuments((prev) => [document, ...prev]);
@@ -692,6 +702,7 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
     verifyScript,
     pushScript,
     sendKrollStep,
+    openKrollFax,
     completeKrollPush,
     createManualScript,
     checkHelper,

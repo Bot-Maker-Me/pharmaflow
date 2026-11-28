@@ -187,6 +187,8 @@ export default function Intake() {
         confidence: s?.overall_confidence,
         store_id: fax.store_id,
         fax_mail_id: fax.mail_id,
+        fax_received: fax.received_label ?? undefined,
+        fax_from: fax.from_label ?? undefined,
         extra_flags: [
           ...(m?.sig_hint ? [`Staff usually change this sig to "${m.sig_hint.to}" (${m.sig_hint.hits}x) - check the dose and timing`] : []),
           ...(m?.sig_learned ? [`Sig was adjusted to match how staff usually write it - please confirm`] : []),

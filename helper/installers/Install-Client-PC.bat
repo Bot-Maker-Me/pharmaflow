@@ -39,6 +39,7 @@ exit /b
 
 if not exist "%DEST%" mkdir "%DEST%"
 copy /Y "%~dp0..\workstation_helper.py" "%DEST%\workstation_helper.py" >nul
+copy /Y "%~dp0..\kroll_driver.py" "%DEST%\kroll_driver.py" >nul
 if errorlevel 1 (
   echo  Could not find workstation_helper.py in the folder above. Extract the whole zip first.
   pause
@@ -48,7 +49,7 @@ if errorlevel 1 (
 cd /d "%DEST%"
 if not exist ".venv\Scripts\python.exe" %PY% -m venv .venv
 echo  Installing parts (needs internet)...
-".venv\Scripts\python.exe" -m pip install -q Flask waitress pyautogui pyperclip pystray Pillow
+".venv\Scripts\python.exe" -m pip install -q Flask waitress pyautogui pyperclip pystray Pillow pywinauto psutil
 if errorlevel 1 (
   echo  Install failed. Check the internet and try again.
   pause

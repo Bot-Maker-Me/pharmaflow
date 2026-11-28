@@ -67,7 +67,9 @@ export function KrollGuidedDialog({
   script?: Script;
   onFinished?: () => void;
 }) {
-  const { sendKrollStep, completeKrollPush, helperStatus } = useAppStore();
+  const { sendKrollStep, openKrollFax, completeKrollPush, helperStatus } = useAppStore();
+  const [openRes, setOpenRes] = React.useState<{ ok: boolean; message: string } | null>(null);
+  const [auto, setAuto] = React.useState(false);
   const [busy, setBusy] = React.useState<KrollStep | null>(null);
   const [results, setResults] = React.useState<Partial<Record<KrollStep, { ok: boolean; message: string }>>>({});
 
@@ -75,6 +77,7 @@ export function KrollGuidedDialog({
     if (open) {
       setResults({});
       setBusy(null);
+      setOpenRes(null);
     }
   }, [open, script?.id]);
 
@@ -86,6 +89,26 @@ export function KrollGuidedDialog({
     const result = await sendKrollStep(script.id, step);
     setResults((prev) => ({ ...prev, [step]: result }));
     setBusy(null);
+  };
+
+  const isFax = Boolean(script.faxReceived);
+
+  /** One button: open the fax in Kroll (clears it from Pending), then type the patient and the doctor. Stops at the first problem. */
+  const runAuto = async () => {
+    setAuto(true);
+    setResults({});
+    const opened = await openKrollFax(script.id);
+    setOpenRes(opened);
+    if (opened.ok) {
+      for (const step of ["patient", "doctor"] as KrollStep[]) {
+        setBusy(step);
+        const r = await sendKrollStep(script.id, step);
+        setResults((prev) => ({ ...prev, [step]: r }));
+        setBusy(null);
+        if (!r.ok) break;
+      }
+    }
+    setAuto(false);
   };
 
   const finish = () => {
@@ -100,7 +123,7 @@ export function KrollGuidedDialog({
         <DialogHeader>
           <DialogTitle>Enter into Kroll</DialogTitle>
           <DialogDescription>
-            Open the Rx Dropoff Form in Kroll first. Press each step in order. PharmFlow brings Kroll to the front and
+            For a fax, press Do it first (or open the Rx Dropoff Form in Kroll yourself). Then press each step in order. PharmFlow brings Kroll to the front and
             types that step.
           </DialogDescription>
         </DialogHeader>
@@ -112,6 +135,28 @@ export function KrollGuidedDialog({
             {" - "}it must match the date of birth in Kroll.
           </p>
         </div>
+
+        {isFax ? (
+          <div className="border-2 border-foreground p-2.5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">Open the fax in Kroll for me</p>
+                <p className="text-[11px] text-muted-foreground">
+                  Kroll must be on Inbound Docs (Show: Pending). PharmFlow selects this fax, presses F2, picks "Use to process
+                  prescription(s)" and Process, then types the patient and the doctor. Do not touch the mouse while it runs.
+                </p>
+              </div>
+              <Button size="sm" disabled={!!busy || auto || offline} onClick={() => void runAuto()}>
+                {auto ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Do it
+              </Button>
+            </div>
+            {openRes ? (
+              <p className={cn("mt-1 text-[11px]", openRes.ok ? "text-[#1F7A4D]" : "text-destructive")}>
+                {openRes.ok ? "✓" : "✗"} {openRes.message}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {offline ? (
           <p className="border-2 border-destructive bg-destructive/10 p-2 text-xs text-destructive">

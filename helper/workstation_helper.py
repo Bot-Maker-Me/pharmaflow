@@ -483,7 +483,7 @@ def guard():
         return jsonify({"status": "error", "message": "Origin not allowed"}), 403
     if request.method == "OPTIONS":
         return None
-    if request.path == "/autofill" and SETTINGS.token:
+    if request.path in ("/autofill", "/kroll/open-fax") and SETTINGS.token:
         supplied = request.headers.get("x-helper-token", "")
         if not hmac.compare_digest(supplied, SETTINGS.token):
             return jsonify({"status": "error", "message": "Invalid or missing helper token"}), 401
@@ -519,6 +519,47 @@ def health():
 @app.get("/")
 def index():
     return health()
+
+
+@app.route("/kroll/open-fax", methods=["POST", "OPTIONS"])
+def kroll_open_fax():
+    """Open one inbound fax as a prescription in Kroll (Inbound Docs -> F2 -> Use to process -> Process).
+    Stops when the Rx Dropoff Form is open; types nothing into it."""
+    if request.method == "OPTIONS":
+        return ("", 204)
+    body = request.get_json(silent=True) or {}
+    received, sender = str(body.get("received") or ""), str(body.get("from") or "")
+    if not received:
+        return jsonify({"status": "error", "message": "received (fax time) is required"}), 400
+    if SETTINGS.dry_run:
+        return jsonify({"status": "ok", "message": "dry-run: would open the fax in Kroll"})
+    if not _autofill_lock.acquire(blocking=False):
+        return jsonify({"status": "error", "message": "Another autofill is already running"}), 429
+    try:
+        try:
+            import pythoncom  # type: ignore
+            pythoncom.CoInitialize()
+        except Exception:  # noqa: BLE001
+            pass
+        import kroll_driver
+        rows = kroll_driver.read_fax_rows()
+        if not rows:
+            return jsonify({"status": "error", "message": "Open Kroll on Inbound Docs (Show: Pending) first - the fax list was not found."}), 409
+        m = kroll_driver.match_row([{"date": r["date"], "desc": r["desc"]} for r in rows], received, sender)
+        if not m["ok"]:
+            return jsonify({"status": "error", "message": f"Fax not found in Kroll's Pending list: {m['error']}"}), 409
+        row = next(r for r in rows if r["date"] == m["row"]["date"] and r["desc"] == m["row"]["desc"])
+        res = kroll_driver.open_fax_as_prescription(row, log=lambda t: log.info("open-fax: %s", t))
+        if not res["ok"]:
+            return jsonify({"status": "error", "message": f"{res['step']}: {res['error']}"}), 409
+        return jsonify({"status": "ok", "message": "Rx Dropoff Form is open"})
+    except ImportError:
+        return jsonify({"status": "error", "message": "Automatic opening needs: pip install pywinauto psutil (run Install-Client-PC.bat again)"}), 503
+    except Exception as exc:  # noqa: BLE001
+        log.exception("open-fax failed")
+        return jsonify({"status": "error", "message": f"Could not open the fax: {str(exc)[:100]}"}), 500
+    finally:
+        _autofill_lock.release()
 
 
 @app.route("/autofill", methods=["POST", "OPTIONS"])

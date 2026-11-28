@@ -107,6 +107,9 @@ export interface Script {
   /** Set when this script came from a fax the agent read in Kroll's Inbound Docs (dbo.Mail id). */
   faxMailId?: number;
   faxStoreId?: string;
+  /** Fax time (Kroll server clock) and sender, used to find the fax in Kroll's Inbound Docs list. */
+  faxReceived?: string;
+  faxFrom?: string;
   /** Original AI / intake values; used to learn when the tech corrects fields. */
   extractionSnapshot?: ExtractionSnapshot;
 }
