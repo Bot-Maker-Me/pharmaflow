@@ -88,7 +88,7 @@ function Counter({ label, cleared, received }: { label: string; cleared: number 
 }
 
 export default function Intake() {
-  const { settings, scripts, createManualScript, helperStatus, updatePatient } = useAppStore();
+  const { settings, scripts, createManualScript, helperStatus, updatePatient, updatePrescriber, updateMedication } = useAppStore();
   const navigate = useNavigate();
   const [tab, setTab] = React.useState<Tab>("new");
   const [rows, setRows] = React.useState<FaxRow[]>([]);
@@ -217,6 +217,7 @@ export default function Intake() {
           ...(fillLic ? [`Licence ${fillLic} filled in from Kroll (Dr ${dr?.first} ${dr?.last}, found by name) - the fax had none`] : []),
           ...(fillDin ? [`DIN ${fillDin} filled in from Kroll (${en?.drug?.reason}) - check it is the product you want`] : []),
           ...(dr?.status === "found" && dr.name_ok === false ? [`Licence on the fax belongs to Dr ${dr.first} ${dr.last} in Kroll, but the fax says "${s?.prescriber?.name}" - check the doctor`] : []),
+          ...(dr?.status === "by_name" && dr.licence && s?.prescriber?.license_number && dr.licence.replace(/\W/g, "") !== s.prescriber.license_number.replace(/\W/g, "") ? [`Kroll has licence ${dr.licence} for Dr ${dr.first} ${dr.last}; the fax says ${s.prescriber.license_number} - check which is right`] : []),
           ...(dr?.status === "several" ? [`Several doctors in Kroll match "${s?.prescriber?.name}" and the licence is missing - pick the doctor in Kroll`] : []),
           ...(en?.drug && !faxDin && !fillDin && en.drug.candidates.length > 1 ? [`${en.drug.candidates.length} Kroll products match this drug - staff pick the DIN`] : []),
           ...(lr ? [`Kroll's last Rx of this drug${lr.filled ? ` (${lr.filled})` : ""}: sig "${lr.sig ?? "?"}", qty ${lr.qty ?? "?"}, refills ${lr.refills ?? "?"}${m?.quantity && lr.qty != null && Number(lr.qty) !== Number(m.quantity) ? " - quantity differs from the fax" : ""}`] : []),
@@ -242,6 +243,15 @@ export default function Intake() {
         updatePatient(existing.id, { full_name: `${kp.last}, ${kp.first}` });
       }
     });
+    // Same for the doctor's licence and the DIN: fill them from Kroll when the review screen still has them empty.
+    rows.forEach((fax) => {
+      const en = fax.kroll_enrich;
+      const existing = scripts.find((x) => x.faxMailId === fax.mail_id);
+      if (!en || !existing || existing.status !== "pending") return;
+      if (en.fills?.licence && !existing.prescriber.license_number) updatePrescriber(existing.id, { license_number: en.fills.licence });
+      const med = existing.medications[0];
+      if (en.fills?.din && med && !med.din) updateMedication(existing.id, med.id, { din: en.fills.din });
+    });
     rows.filter((f) => f.is_prescription !== false).forEach((fax) => {
       if (!firstSeen.current.has(fax.mail_id)) firstSeen.current.set(fax.mail_id, now);
       if (scripts.some((s) => s.faxMailId === fax.mail_id)) return;
@@ -249,7 +259,7 @@ export default function Intake() {
       if (!fax.kroll_patient && now - (firstSeen.current.get(fax.mail_id) ?? now) < 90000) return;
       scriptFor(fax, true);
     });
-  }, [rows, scripts, scriptFor, tab, updatePatient]);
+  }, [rows, scripts, scriptFor, tab, updatePatient, updatePrescriber, updateMedication]);
 
   async function dismiss(fax: FaxRow) {
     if (!window.confirm("Remove this fax from the list? Use this when it is not a prescription.")) return;

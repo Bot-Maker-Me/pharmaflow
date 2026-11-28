@@ -1299,6 +1299,41 @@ class KrollDB:
         din = self._din8(row[0])
         return {"din": din, "name": str(row[1] or "").strip()} if (din or row[1]) else None
 
+    def columns(self, table: str) -> Dict[str, str]:
+        """{UPPER: real name} of a table's columns (cached). Empty dict if it can't be read."""
+        cache = self.__dict__.setdefault("_cols", {})
+        tn = str(table or "").split(".")[-1]
+        if tn in cache:
+            return cache[tn]
+        cols: Dict[str, str] = {}
+        try:
+            cur = self.ensure().cursor()
+            try:
+                cur.execute("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?", (tn,))
+                cols = {str(r[0]).upper(): str(r[0]) for r in cur.fetchall()}
+            finally:
+                cur.close()
+        except Exception as exc:  # noqa: BLE001
+            self.log.debug("columns(%s) failed: %s", tn, exc)
+        cache[tn] = cols
+        return cols
+
+    def active_clause(self, table: str, alias: str = "") -> str:
+        """' AND (...)' that keeps only ACTIVE, un-merged rows of a Kroll table (patients, doctors, drugs); '' if the
+        table has no such columns. Inactive / merged-away profiles must never be matched."""
+        cols = self.columns(table)
+        pre = f"{alias}." if alias else ""
+        parts = []
+        if "ACTIVE" in cols:
+            parts.append(f"({pre}[{cols['ACTIVE']}] = 1 OR {pre}[{cols['ACTIVE']}] IS NULL)")
+        if "INACTIVE" in cols:
+            parts.append(f"({pre}[{cols['INACTIVE']}] = 0 OR {pre}[{cols['INACTIVE']}] IS NULL)")
+        if "DISCONTINUED" in cols:
+            parts.append(f"({pre}[{cols['DISCONTINUED']}] = 0 OR {pre}[{cols['DISCONTINUED']}] IS NULL)")
+        if "MERGEDTOID" in cols:
+            parts.append(f"({pre}[{cols['MERGEDTOID']}] IS NULL OR {pre}[{cols['MERGEDTOID']}] = 0)")
+        return (" AND " + " AND ".join(parts)) if parts else ""
+
     def search_drugs(self, drug_name: str, strength: str = "") -> List[Dict[str, Any]]:
         """Kroll drugs matching name + strength, most-dispensed first. Empty list if unavailable."""
         ds = self._resolve_drug_schema()
@@ -1318,10 +1353,12 @@ class KrollDB:
         try:
             cur = self.ensure().cursor()
             try:
-                for word in words[:3]:                    # try the longest word first, then the next ones
+                act = self.active_clause(ds["drug_table"])
+                for use_active in ((True, False) if act else (False,)):   # active products first; all only if none
+                  for word in words[:3]:                  # try the longest word first, then the next ones
                     sql = (f"SELECT TOP 200 [{ds['drug_id']}], [{ds['drug_din']}], {full}, "
                            f"{'[' + scol + ']' if scol else 'NULL'} FROM {ds['drug_table']} WITH (NOLOCK) "
-                           f"WHERE {name_cond} AND [{ds['drug_din']}] IS NOT NULL")
+                           f"WHERE {name_cond} AND [{ds['drug_din']}] IS NOT NULL" + (act if use_active else ""))
                     params: List[Any] = [f"%{word}%"] * len(nc)
                     if num and scol:
                         sql += f" AND [{scol}] LIKE ?"
@@ -1338,6 +1375,8 @@ class KrollDB:
                         found.append({"drug_id": drg_id, "din": d, "name": label, "uses": 0})
                     if found:
                         break
+                  if found:
+                    break
             finally:
                 cur.close()
         except Exception as exc:
@@ -2820,8 +2859,9 @@ def resolve_patient(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
         cur = db.ensure().cursor()
         try:
             for iso, swapped in dates:
+                act = db.active_clause(s["pat_table"]) if hasattr(db, "active_clause") else ""   # active profiles only
                 cur.execute(f"SELECT TOP 50 {s['pat_id']}, {s['pat_first']}, {s['pat_last']} FROM {s['pat_table']} WITH (NOLOCK) "
-                            f"WHERE CAST({s['pat_dob']} AS date) = ?", (iso,))
+                            f"WHERE CAST({s['pat_dob']} AS date) = ?{act}", (iso,))
                 rows = cur.fetchall()
                 if not rows:
                     continue
@@ -2889,25 +2929,51 @@ def enrich_fax(db: "KrollDB", script: Dict[str, Any], kp: Dict[str, Any]) -> Dic
             fax_first, fax_last = split_patient_name(re.sub(r"\b(dr|md|doctor|m\.d)\b\.?", " ", str(doc.get("name") or ""), flags=re.I))
             ids: List[Any] = []
             how = ""
-            if lic and s.get("lic_table") and s.get("lic_num"):
-                cur.execute(f"SELECT TOP 3 {s['lic_doc_id']} FROM {s['lic_table']} WITH (NOLOCK) WHERE {s['lic_num']} = ?", (lic,))
-                ids = [r[0] for r in cur.fetchall()]
-                how = "licence"
+            dact = db.active_clause(s["doc_table"]) if (hasattr(db, "active_clause") and s.get("doc_table")) else ""
+            dcols = db.columns(s["doc_table"]) if (hasattr(db, "columns") and s.get("doc_table")) else {}
+            lic_cols = [dcols[c] for c in ("LICENCE1", "LICENCE2", "LICENSE1", "LICENSE2") if c in dcols]
+            if lic and s.get("doc_table"):
+                conds, params = [], []
+                if s.get("lic_table") and s.get("lic_num"):
+                    conds.append(f"{s['doc_id']} IN (SELECT {s['lic_doc_id']} FROM {s['lic_table']} WITH (NOLOCK) WHERE {s['lic_num']} = ?)")
+                    params.append(lic)
+                for c in lic_cols:
+                    conds.append(f"[{c}] = ?")
+                    params.append(lic)
+                if conds:
+                    cur.execute(f"SELECT TOP 3 {s['doc_id']} FROM {s['doc_table']} WITH (NOLOCK) WHERE ({' OR '.join(conds)}){dact}", tuple(params))
+                    ids = [r[0] for r in cur.fetchall()]
+                    how = "licence"
             if not ids and fax_last and s.get("doc_table") and s.get("doc_last"):
-                cur.execute(f"SELECT TOP 6 {s['doc_id']} FROM {s['doc_table']} WITH (NOLOCK) WHERE {s['doc_last']} = ?"
-                            + (f" AND LEFT({s['doc_first']}, 1) = ?" if fax_first and s.get("doc_first") else ""),
-                            (fax_last, fax_first[:1]) if fax_first and s.get("doc_first") else (fax_last,))
-                ids = [r[0] for r in cur.fetchall()]
-                how = "name"
+                order = f" ORDER BY [{dcols['LASTUSED']}] DESC" if "LASTUSED" in dcols else ""
+                for exact in (True, False):          # exact last name first, then "starts with" (spelling slips)
+                    op, val = ("= ?", fax_last) if exact else ("LIKE ?", fax_last[:5] + "%")
+                    if not exact and len(fax_last) < 5:
+                        break
+                    q = f"SELECT TOP 6 {s['doc_id']} FROM {s['doc_table']} WITH (NOLOCK) WHERE {s['doc_last']} {op}"
+                    prm: Tuple[Any, ...] = (val,)
+                    if fax_first and s.get("doc_first"):
+                        q += f" AND LEFT({s['doc_first']}, 1) = ?"
+                        prm = (val, fax_first[:1])
+                    cur.execute(q + dact + order, prm)
+                    ids = [r[0] for r in cur.fetchall()]
+                    how = "name"
+                    if ids:
+                        break
             if len(ids) >= 1 and s.get("doc_table"):
                 cur.execute(f"SELECT TOP 1 {s['doc_first']}, {s['doc_last']} FROM {s['doc_table']} WITH (NOLOCK) WHERE {s['doc_id']} = ?", (ids[0],))
                 r = cur.fetchone()
                 dfirst, dlast = (str(r[0] or "").strip().title(), str(r[1] or "").strip().title()) if r else ("", "")
                 kroll_lic = lic if how == "licence" else ""
-                if how == "name" and len(ids) == 1 and s.get("lic_table"):
-                    cur.execute(f"SELECT TOP 1 {s['lic_num']} FROM {s['lic_table']} WITH (NOLOCK) WHERE {s['lic_doc_id']} = ?", (ids[0],))
-                    r2 = cur.fetchone()
-                    kroll_lic = str(r2[0] or "").strip() if r2 else ""
+                if how == "name" and len(ids) == 1:
+                    if s.get("lic_table") and s.get("lic_num"):
+                        cur.execute(f"SELECT TOP 1 {s['lic_num']} FROM {s['lic_table']} WITH (NOLOCK) WHERE {s['lic_doc_id']} = ?", (ids[0],))
+                        r2 = cur.fetchone()
+                        kroll_lic = str(r2[0] or "").strip() if r2 else ""
+                    if not kroll_lic and lic_cols:
+                        cur.execute(f"SELECT TOP 1 {', '.join('[' + c + ']' for c in lic_cols)} FROM {s['doc_table']} WITH (NOLOCK) WHERE {s['doc_id']} = ?", (ids[0],))
+                        r3 = cur.fetchone()
+                        kroll_lic = next((str(v).strip() for v in (r3 or ()) if v and str(v).strip()), "")
                 name_ok = None
                 if fax_last and dlast:
                     name_ok = name_score(fax_last, "", dlast) >= 0.8
@@ -2943,6 +3009,11 @@ def enrich_fax(db: "KrollDB", script: Dict[str, Any], kp: Dict[str, Any]) -> Dic
                     pick, reason = out_c[0]["din"], "only matching product in Kroll"
                 elif len(in_hist) == 1:
                     pick, reason = in_hist[0]["din"], "this patient got this product before"
+                elif len(in_hist) > 1:
+                    recent = next(iter(hist))
+                    pick, reason = next(c["din"] for c in cands if c["drug_id"] == recent), "the product this patient got most recently"
+                elif len(out_c) > 1 and out_c[0]["uses"] >= 3 and out_c[0]["uses"] >= 3 * max(out_c[1]["uses"], 1):
+                    pick, reason = out_c[0]["din"], f"the product this pharmacy dispenses most ({out_c[0]['uses']} in 12 months)"
                 out["drug"] = {"candidates": out_c, "pick": pick, "reason": reason}
                 if pick and not fax_din:
                     out["fills"]["din"] = pick
