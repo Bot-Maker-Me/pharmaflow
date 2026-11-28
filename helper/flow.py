@@ -1748,6 +1748,15 @@ class CloudClient:
         except requests.RequestException:
             return False
 
+    def push_kroll_enrich(self, mail_id: int, enrich: Dict[str, Any]) -> bool:
+        try:
+            resp = self.session.post(self._sibling("agent-fax"), json={
+                "type": "kroll_enrich", "store_id": self.cfg.store_id, "mail_id": int(mail_id), "kroll_enrich": enrich},
+                timeout=CLOUD_TIMEOUT_SEC)
+            return 200 <= resp.status_code < 300
+        except requests.RequestException:
+            return False
+
     def push_fax_result(self, payload: Dict[str, Any]) -> bool:
         try:
             resp = self.session.post(self._sibling("agent-fax"), json=payload, timeout=CLOUD_TIMEOUT_SEC)
@@ -2291,6 +2300,7 @@ class PharmFlowAgent:
             for item in self.cloud.get_unresolved_faxes(10):
                 script = ((item.get("ocr") or {}).get("scripts") or [{}])[0]
                 kp = resolve_patient(self.db, script)
+                self.cloud.push_kroll_enrich(int(item["mail_id"]), enrich_fax(self.db, script, kp))
                 if self.cloud.push_kroll_patient(int(item["mail_id"]), kp):
                     self.log.info("Fax Mail=%s patient lookup by date of birth: %s (name fit %.2f, %d with that DOB)",
                                   item["mail_id"], kp["status"], kp["score"], kp["n_dob"])
@@ -2858,6 +2868,93 @@ def resolve_patient(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
             cur.close()
     except Exception:  # noqa: BLE001
         pass
+    return out
+
+
+def enrich_fax(db: "KrollDB", script: Dict[str, Any], kp: Dict[str, Any]) -> Dict[str, Any]:
+    """Check one OCR'd prescription against Kroll and say what Kroll knows: the doctor (by licence, else by name), the
+    drug products (DIN candidates, which one this patient had before), and the patient's last Rx of it. Read-only.
+    `fills` holds only the SAFE gap-fills (a missing licence found by name, a missing DIN with one clear product).
+    Dose / quantity / refills are never changed: the last Rx is only shown as a suggestion. Never raises."""
+    out: Dict[str, Any] = {"doctor": {"status": "none"}, "drug": {"candidates": [], "pick": None, "reason": ""},
+                           "last_rx": None, "fills": {}}
+    try:
+        s, rx = db.cfg.schema, db.cfg.rx_schema
+        doc = script.get("prescriber") or {}
+        med = (script.get("medications") or [{}])[0]
+        cur = db.ensure().cursor()
+        try:
+            # ---- doctor
+            lic = "".join(ch for ch in str(doc.get("license_number") or "") if ch.isalnum())
+            fax_first, fax_last = split_patient_name(re.sub(r"\b(dr|md|doctor|m\.d)\b\.?", " ", str(doc.get("name") or ""), flags=re.I))
+            ids: List[Any] = []
+            how = ""
+            if lic and s.get("lic_table") and s.get("lic_num"):
+                cur.execute(f"SELECT TOP 3 {s['lic_doc_id']} FROM {s['lic_table']} WITH (NOLOCK) WHERE {s['lic_num']} = ?", (lic,))
+                ids = [r[0] for r in cur.fetchall()]
+                how = "licence"
+            if not ids and fax_last and s.get("doc_table") and s.get("doc_last"):
+                cur.execute(f"SELECT TOP 6 {s['doc_id']} FROM {s['doc_table']} WITH (NOLOCK) WHERE {s['doc_last']} = ?"
+                            + (f" AND LEFT({s['doc_first']}, 1) = ?" if fax_first and s.get("doc_first") else ""),
+                            (fax_last, fax_first[:1]) if fax_first and s.get("doc_first") else (fax_last,))
+                ids = [r[0] for r in cur.fetchall()]
+                how = "name"
+            if len(ids) >= 1 and s.get("doc_table"):
+                cur.execute(f"SELECT TOP 1 {s['doc_first']}, {s['doc_last']} FROM {s['doc_table']} WITH (NOLOCK) WHERE {s['doc_id']} = ?", (ids[0],))
+                r = cur.fetchone()
+                dfirst, dlast = (str(r[0] or "").strip().title(), str(r[1] or "").strip().title()) if r else ("", "")
+                kroll_lic = lic if how == "licence" else ""
+                if how == "name" and len(ids) == 1 and s.get("lic_table"):
+                    cur.execute(f"SELECT TOP 1 {s['lic_num']} FROM {s['lic_table']} WITH (NOLOCK) WHERE {s['lic_doc_id']} = ?", (ids[0],))
+                    r2 = cur.fetchone()
+                    kroll_lic = str(r2[0] or "").strip() if r2 else ""
+                name_ok = None
+                if fax_last and dlast:
+                    name_ok = name_score(fax_last, "", dlast) >= 0.8
+                status = "found" if how == "licence" else ("by_name" if len(ids) == 1 else "several")
+                out["doctor"] = {"status": status, "doc_id": ids[0] if len(ids) == 1 or how == "licence" else None,
+                                 "first": dfirst, "last": dlast, "licence": kroll_lic, "name_ok": name_ok}
+                if how == "name" and len(ids) == 1 and kroll_lic and not lic:
+                    out["fills"]["licence"] = kroll_lic
+            # ---- drug
+            if med.get("drug_name") and not med.get("is_compound"):
+                cands = db.search_drugs(med.get("drug_name", ""), med.get("strength", ""))
+                pat_id = kp.get("pat_id") if kp and kp.get("status") in ("exact", "corrected", "ambiguous") else None
+                hist: Dict[Any, Dict[str, Any]] = {}
+                if cands and pat_id is not None and rx.get("rx_table") and rx.get("rx_pat_id") and rx.get("rx_drug_id"):
+                    marks = ",".join("?" for _ in cands)
+                    cols = ", ".join(f"{rx[k]} AS {k}" for k in ("rx_drug_id", "rx_sig", "rx_qty", "rx_refills", "rx_created") if rx.get(k))
+                    cur.execute(f"SELECT TOP 5 {cols} FROM {rx['rx_table']} WITH (NOLOCK) "
+                                f"WHERE {rx['rx_pat_id']} = ? AND {rx['rx_drug_id']} IN ({marks}) "
+                                f"ORDER BY {rx.get('rx_created') or rx['rx_id']} DESC", (pat_id, *[c["drug_id"] for c in cands]))
+                    for row in cur.fetchall():
+                        got = {c[0]: jsonable(v) for c, v in zip(cur.description, row)}
+                        hist.setdefault(got.get("rx_drug_id"), got)
+                out_c = []
+                for c in cands[:5]:
+                    h = hist.get(c["drug_id"])
+                    out_c.append({"din": c["din"], "name": c["name"], "uses": c.get("uses", 0), "in_history": bool(h)})
+                fax_din = re.sub(r"\D", "", str(med.get("din") or ""))
+                pick, reason = None, ""
+                in_hist = [c for c in out_c if c["in_history"]]
+                if fax_din and any(c["din"].lstrip("0") == fax_din.lstrip("0") for c in out_c):
+                    pick, reason = next(c["din"] for c in out_c if c["din"].lstrip("0") == fax_din.lstrip("0")), "DIN on the fax is a Kroll product"
+                elif len(out_c) == 1:
+                    pick, reason = out_c[0]["din"], "only matching product in Kroll"
+                elif len(in_hist) == 1:
+                    pick, reason = in_hist[0]["din"], "this patient got this product before"
+                out["drug"] = {"candidates": out_c, "pick": pick, "reason": reason}
+                if pick and not fax_din:
+                    out["fills"]["din"] = pick
+                if hist:
+                    best = next(iter(hist.values()))
+                    out["last_rx"] = {"din": next((c["din"] for c in cands if c["drug_id"] == best.get("rx_drug_id")), ""),
+                                      "sig": best.get("rx_sig"), "qty": best.get("rx_qty"), "refills": best.get("rx_refills"),
+                                      "filled": str(best.get("rx_created") or "")[:10]}
+        finally:
+            cur.close()
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)[:80]
     return out
 
 

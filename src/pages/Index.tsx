@@ -26,6 +26,12 @@ interface FaxRow {
   from_label: string | null;
   is_prescription?: boolean;
   kroll_patient?: { status: "exact" | "corrected" | "ambiguous" | "none"; first: string; last: string; score: number; n_dob: number; dob_swapped: boolean; tie_broken?: boolean; candidates?: Array<{ first: string; last: string; score: number }> } | null;
+  kroll_enrich?: {
+    doctor?: { status: "found" | "by_name" | "several" | "none"; first: string; last: string; licence: string; name_ok: boolean | null };
+    drug?: { candidates: Array<{ din: string; name: string; uses: number; in_history: boolean }>; pick: string | null; reason: string };
+    last_rx?: { din: string; sig: string; qty: number | null; refills: number | null; filled: string } | null;
+    fills?: { licence?: string; din?: string };
+  } | null;
   doc_type?: string | null;
   summary?: string | null;
   page_image_url: string | null;
@@ -174,14 +180,24 @@ export default function Intake() {
       const kp = fax.kroll_patient;
       const useKroll = kp && (kp.status === "exact" || kp.status === "corrected" || kp.status === "ambiguous") && kp.last;
       const faxName = s?.patient?.full_name || "UNKNOWN PATIENT";
+      const en = fax.kroll_enrich;
+      const faxDin = (m?.din || "").replace(/\D/g, "");
+      const fillDin = !faxDin && en?.fills?.din ? en.fills.din : "";
+      const fillLic = !s?.prescriber?.license_number && en?.fills?.licence ? en.fills.licence : "";
+      const lr = en?.last_rx;
+      const dr = en?.doctor;
       return createManualScript({
         full_name: useKroll ? `${kp.last}, ${kp.first}` : faxName,
         dob: s?.patient?.dob || "",
         health_card_num: s?.patient?.health_card_num || "",
         prescriber_name: s?.prescriber?.name || "",
-        license_number: s?.prescriber?.license_number || "",
+        license_number: s?.prescriber?.license_number || fillLic,
         drug_name: m?.drug_name || "",
-        din: m?.din || "",
+        din: m?.din || fillDin,
+        ...(en?.drug?.candidates?.length && !faxDin ? {
+          din_source: fillDin ? "kroll_unique_match" : "kroll_candidates",
+          din_candidates: en.drug.candidates.map((c) => ({ din: c.din, brand: c.name, company: "", strength: m?.strength || "", form: "", uses: c.uses })),
+        } : {}),
         strength: m?.strength || "",
         quantity: Number(m?.quantity) || 0,
         refills: Number(m?.refills) || 0,
@@ -198,6 +214,12 @@ export default function Intake() {
           ...(useKroll && kp.status === "corrected" ? [`Name on the fax: "${faxName}". Kroll's patient with this date of birth is "${kp.first} ${kp.last}"${kp.dob_swapped ? " (date read with day and month swapped)" : ""} - check it is the same person`] : []),
           ...(kp?.status === "ambiguous" ? [`${kp.n_dob} Kroll patients share this date of birth (${(kp.candidates ?? []).map((c) => `${c.first} ${c.last}`).join(" / ")}). Best guess used: ${kp.first} ${kp.last} - check it in Kroll's patient list`] : []),
           ...(kp?.tie_broken ? [`Two Kroll patients fit this name and date of birth; chose ${kp.first} ${kp.last} (full name on the fax, or the one with recent prescriptions) - check it`] : []),
+          ...(fillLic ? [`Licence ${fillLic} filled in from Kroll (Dr ${dr?.first} ${dr?.last}, found by name) - the fax had none`] : []),
+          ...(fillDin ? [`DIN ${fillDin} filled in from Kroll (${en?.drug?.reason}) - check it is the product you want`] : []),
+          ...(dr?.status === "found" && dr.name_ok === false ? [`Licence on the fax belongs to Dr ${dr.first} ${dr.last} in Kroll, but the fax says "${s?.prescriber?.name}" - check the doctor`] : []),
+          ...(dr?.status === "several" ? [`Several doctors in Kroll match "${s?.prescriber?.name}" and the licence is missing - pick the doctor in Kroll`] : []),
+          ...(en?.drug && !faxDin && !fillDin && en.drug.candidates.length > 1 ? [`${en.drug.candidates.length} Kroll products match this drug - staff pick the DIN`] : []),
+          ...(lr ? [`Kroll's last Rx of this drug${lr.filled ? ` (${lr.filled})` : ""}: sig "${lr.sig ?? "?"}", qty ${lr.qty ?? "?"}, refills ${lr.refills ?? "?"}${m?.quantity && lr.qty != null && Number(lr.qty) !== Number(m.quantity) ? " - quantity differs from the fax" : ""}`] : []),
           ...(m?.sig_hint ? [`Staff usually change this sig to "${m.sig_hint.to}" (${m.sig_hint.hits}x) - check the dose and timing`] : []),
           ...(m?.sig_learned ? [`Sig was adjusted to match how staff usually write it - please confirm`] : []),
         ],
@@ -341,6 +363,16 @@ export default function Intake() {
                   {m?.sig || "no sig"} · Dr {s?.prescriber?.name || "?"}
                 </p>
                 </>)}
+                {(() => {
+                  const en = fax.kroll_enrich;
+                  if (!en) return null;
+                  const bits = [
+                    en.doctor?.status === "found" || en.doctor?.status === "by_name" ? `Dr ${en.doctor.first} ${en.doctor.last} in Kroll${en.doctor.status === "by_name" ? " (by name)" : ""}` : en.doctor?.status === "several" ? "Several matching doctors" : "Doctor not found in Kroll",
+                    en.drug?.pick ? `DIN ${en.drug.pick} (${en.drug.reason})` : en.drug?.candidates?.length ? `${en.drug.candidates.length} products to pick from` : null,
+                    en.last_rx ? `last Rx: ${en.last_rx.sig ?? "?"} · qty ${en.last_rx.qty ?? "?"}` : null,
+                  ].filter(Boolean);
+                  return <p className="font-data text-[11px] text-muted-foreground">Kroll says: {bits.join(" · ")}</p>;
+                })()}
                 <p className="mt-1 font-data text-[11px] text-muted-foreground">
                   {fax.received_label ?? ""} · {fax.from_label ?? "unknown sender"}
                 </p>

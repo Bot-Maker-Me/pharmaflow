@@ -165,7 +165,7 @@ async function listUnresolved(req, res, cfg) {
   const n = Math.min(20, Math.max(1, Number(q.get("unresolved")) || 10));
   if (!cfg) return send(res, 200, { ok: true, items: [] });
   const params = new URLSearchParams({
-    store_id: `eq.${storeId}`, is_prescription: "eq.true", status: "eq.new", kroll_patient: "is.null",
+    store_id: `eq.${storeId}`, is_prescription: "eq.true", status: "eq.new", kroll_enrich: "is.null",
     select: "mail_id,ocr", order: "mail_id.desc", limit: String(n),
   });
   const resp = await fetch(`${cfg.url}/rest/v1/inbound_faxes?${params}`, { headers: sbHeaders(cfg.key) });
@@ -187,6 +187,30 @@ async function handleKrollPatient(body, res, cfg) {
   const storeId = String(body.store_id || "default").slice(0, 64);
   const upd = await fetch(`${cfg.url}/rest/v1/inbound_faxes?store_id=eq.${encodeURIComponent(storeId)}&mail_id=eq.${mailId}`, {
     method: "PATCH", headers: sbHeaders(cfg.key, { Prefer: "return=minimal" }), body: JSON.stringify({ kroll_patient: clean }),
+  });
+  return send(res, upd.ok ? 200 : 502, { ok: upd.ok });
+}
+
+/** POST { type:"kroll_enrich", store_id, mail_id, kroll_enrich:{doctor,drug,last_rx,fills} } - what Kroll knows about the fax. */
+async function handleKrollEnrich(body, res, cfg) {
+  const mailId = Number(body.mail_id);
+  if (!Number.isSafeInteger(mailId) || !cfg) return send(res, 400, { error: "mail_id required" });
+  const e = body.kroll_enrich && typeof body.kroll_enrich === "object" ? body.kroll_enrich : {};
+  const str = (v, n = 80) => String(v ?? "").slice(0, n);
+  const d = e.doctor || {};
+  const cands = (Array.isArray(e.drug?.candidates) ? e.drug.candidates : []).slice(0, 5).map((c) => ({
+    din: str(c.din, 12), name: str(c.name, 80), uses: Number(c.uses) || 0, in_history: Boolean(c.in_history),
+  }));
+  const clean = {
+    doctor: { status: ["found", "by_name", "several", "none"].includes(d.status) ? d.status : "none", first: str(d.first, 40), last: str(d.last, 40),
+              licence: str(d.licence, 20), name_ok: d.name_ok === true ? true : d.name_ok === false ? false : null },
+    drug: { candidates: cands, pick: e.drug?.pick ? str(e.drug.pick, 12) : null, reason: str(e.drug?.reason, 80) },
+    last_rx: e.last_rx ? { din: str(e.last_rx.din, 12), sig: str(e.last_rx.sig, 300), qty: e.last_rx.qty ?? null, refills: e.last_rx.refills ?? null, filled: str(e.last_rx.filled, 10) } : null,
+    fills: { ...(e.fills?.licence ? { licence: str(e.fills.licence, 20) } : {}), ...(e.fills?.din ? { din: str(e.fills.din, 12) } : {}) },
+  };
+  const storeId = String(body.store_id || "default").slice(0, 64);
+  const upd = await fetch(`${cfg.url}/rest/v1/inbound_faxes?store_id=eq.${encodeURIComponent(storeId)}&mail_id=eq.${mailId}`, {
+    method: "PATCH", headers: sbHeaders(cfg.key, { Prefer: "return=minimal" }), body: JSON.stringify({ kroll_enrich: clean }),
   });
   return send(res, upd.ok ? 200 : 502, { ok: upd.ok });
 }
@@ -230,6 +254,7 @@ export default async function handler(req, res) {
   if (typeof body === "string") {
     try { body = JSON.parse(body); } catch { return send(res, 400, { error: "Invalid JSON" }); }
   }
+  if (body?.type === "kroll_enrich") return handleKrollEnrich(body, res, supabaseConfig());
   if (body?.type === "kroll_patient") return handleKrollPatient(body, res, supabaseConfig());
   if (body?.type === "kroll_pending") return handleKrollPending(body, res, supabaseConfig());
   if (body?.type === "fax_result") return handleFaxResult(body, res, supabaseConfig());
