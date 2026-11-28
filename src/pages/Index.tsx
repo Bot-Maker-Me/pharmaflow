@@ -24,6 +24,9 @@ interface FaxRow {
   store_id: string;
   received_label: string | null;
   from_label: string | null;
+  is_prescription?: boolean;
+  doc_type?: string | null;
+  summary?: string | null;
   page_image_url: string | null;
   status: "new" | "pushed" | "dismissed";
   pushed_at: string | null;
@@ -197,7 +200,7 @@ export default function Intake() {
   // New faxes become reviewable scripts by themselves, so "Next" in the review screen walks through the whole list.
   React.useEffect(() => {
     if (tab !== "new") return;
-    rows.forEach((fax) => {
+    rows.filter((f) => f.is_prescription !== false).forEach((fax) => {
       if (!scripts.some((s) => s.faxMailId === fax.mail_id)) scriptFor(fax, true);
     });
   }, [rows, scripts, scriptFor, tab]);
@@ -252,8 +255,8 @@ export default function Intake() {
             Pushed to Kroll
           </Button>
         </div>
-        {tab === "new" && rows.length > 0 && (
-          <Button size="sm" onClick={() => navigate(`/app/verify/${scriptFor(rows[0], true)}`)}>
+        {tab === "new" && rows.some((f) => f.is_prescription !== false) && (
+          <Button size="sm" onClick={() => navigate(`/app/verify/${scriptFor(rows.find((f) => f.is_prescription !== false) ?? rows[0], true)}`)}>
             Start with the first fax
           </Button>
         )}
@@ -268,6 +271,14 @@ export default function Intake() {
           return (
             <li key={fax.mail_id} className={`flex flex-wrap items-center justify-between gap-3 p-4 transition-colors duration-1000 ${fresh.has(fax.mail_id) ? "pf-flash" : ""}`}>
               <div className="min-w-0 flex-1">
+                {fax.is_prescription === false ? (
+                  <>
+                    <p className="text-[15px] font-bold">
+                      {{ refill_request: "Refill request", transfer: "Transfer request", other: "Other fax" }[fax.doc_type ?? "other"] ?? "Other fax"}
+                    </p>
+                    <p className="mt-0.5 text-sm text-muted-foreground">{fax.summary || "Not a new prescription. Open it in Kroll's Inbound Docs."}</p>
+                  </>
+                ) : (<>
                 <p className="text-[15px] font-bold">
                   {s?.patient?.full_name || "Patient not readable"}
                   {s?.patient?.dob ? <span className="ml-2 font-data text-xs font-normal text-muted-foreground">{s.patient.dob}</span> : null}
@@ -279,6 +290,7 @@ export default function Intake() {
                 <p className="truncate text-xs text-muted-foreground">
                   {m?.sig || "no sig"} · Dr {s?.prescriber?.name || "?"}
                 </p>
+                </>)}
                 <p className="mt-1 font-data text-[11px] text-muted-foreground">
                   {fax.received_label ?? ""} · {fax.from_label ?? "unknown sender"}
                 </p>
@@ -294,9 +306,11 @@ export default function Intake() {
                     <Button size="sm" variant="outline" disabled={busy === fax.mail_id} onClick={() => void dismiss(fax)} title="Not a prescription">
                       {busy === fax.mail_id ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
                     </Button>
-                    <Button size="sm" onClick={() => navigate(`/app/verify/${scriptFor(fax, false)}`)}>
-                      <Printer className="h-4 w-4" /> Review &amp; push
-                    </Button>
+                    {fax.is_prescription !== false && (
+                      <Button size="sm" onClick={() => navigate(`/app/verify/${scriptFor(fax, false)}`)}>
+                        <Printer className="h-4 w-4" /> Review &amp; push
+                      </Button>
+                    )}
                   </>
                 ) : (
                   <span className="flex items-center gap-1 text-xs font-medium text-[#1F7A4D] dark:text-emerald-400">

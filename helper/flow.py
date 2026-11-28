@@ -1688,6 +1688,16 @@ class CloudClient:
             return False, str(body.get("ocr_error") or "cloud could not read the fax"), body
         return True, "", body
 
+    def push_kroll_pending(self, ids: List[int], since_label: str) -> bool:
+        """Tell the cloud which faxes are still pending in Kroll so Intake mirrors Kroll's Pending list."""
+        try:
+            resp = self.session.post(self._sibling("agent-fax"), json={
+                "type": "kroll_pending", "store_id": self.cfg.store_id, "ids": ids, "since_label": since_label},
+                timeout=CLOUD_TIMEOUT_SEC)
+            return 200 <= resp.status_code < 300
+        except requests.RequestException:
+            return False
+
     def get_pushed_faxes(self) -> List[Dict[str, Any]]:
         """Faxes staff pushed to Kroll that have not been compared with Kroll's final Rx yet."""
         try:
@@ -2238,6 +2248,16 @@ class PharmFlowAgent:
         except Exception as exc:
             self.log.warning("Could not list inbound faxes: %s", exc)
             return
+        try:
+            days = 60
+            ids = fetch_kroll_pending_ids(self.db.ensure(), days)
+            since = (dt.datetime.now() - dt.timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+            if not self.cloud.push_kroll_pending(ids, since):
+                self.log.warning("Could not tell the cloud which faxes are pending in Kroll")
+            else:
+                self.log.info("Kroll Pending list: %d fax(es)", len(ids))
+        except Exception as exc:                                 # never block fax reading on this
+            self.log.warning("Could not read Kroll's pending list: %s", str(exc)[:120])
         done = 0
         for fax in reversed(faxes):                              # oldest first
             if done >= INBOUND_FAX_PER_CYCLE:
@@ -2793,6 +2813,20 @@ def fetch_inbound_faxes(conn, after_mail_id: int = 0, limit: int = 50,
         cur.close()
     return [{"mail_id": r[0], "received": r[1], "from": (r[2] or ""), "attachment_id": r[3],
              "content_id": r[4], "mime": r[5]} for r in rows]
+
+
+def fetch_kroll_pending_ids(conn, days: int = 60) -> List[int]:
+    """Mail ids of inbound faxes still in Kroll's Inbound Docs 'Pending' list: unread and not deleted for the recipient
+    (checked against Kroll's own count: 7 in the list = 7 here). SELECT only."""
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT DISTINCT m.Id FROM dbo.Mail m WITH (NOLOCK) JOIN dbo.MailRecipient r WITH (NOLOCK) ON r.MailId = m.Id "
+            "WHERE m.MessageType = 19 AND m.MessageId LIKE 'SRFax.%' AND r.DateRead IS NULL AND r.DateDeleted IS NULL "
+            "AND m.DateCreated >= DATEADD(day, -?, GETDATE())", (int(days),))
+        return [int(r[0]) for r in cur.fetchall()]
+    finally:
+        cur.close()
 
 
 def load_mail_attachment_bytes(conn, content_id: Any) -> Optional[bytes]:

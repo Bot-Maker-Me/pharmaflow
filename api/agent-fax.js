@@ -158,6 +158,29 @@ async function handleFaxResult(body, res, cfg) {
   return send(res, upd.ok ? 200 : 502, { ok: upd.ok, ...result });
 }
 
+/**
+ * The agent reports which inbound faxes are still PENDING in Kroll (unread and not deleted for the recipient).
+ * Faxes in the list become 'pending'; faxes received since `since_label` (Kroll server time) that are not in it
+ * became 'processed'. Display only: the fax status (new / pushed / dismissed) is never touched here.
+ */
+async function handleKrollPending(body, res, cfg) {
+  if (!cfg) return send(res, 503, { error: "Database not configured" });
+  const storeId = String(body.store_id || "default").slice(0, 64);
+  const ids = (Array.isArray(body.ids) ? body.ids : []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0).slice(0, 2000);
+  const since = String(body.since_label || "");
+  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(since)) return send(res, 400, { error: "since_label required (YYYY-MM-DD HH:MM:SS)" });
+  const base = `${cfg.url}/rest/v1/inbound_faxes?store_id=eq.${encodeURIComponent(storeId)}`;
+  const hdr = sbHeaders(cfg.key, { Prefer: "return=minimal" });
+  const patch = (q, state) => fetch(`${base}&${q}`, { method: "PATCH", headers: hdr, body: JSON.stringify({ kroll_state: state }) });
+  const list = ids.join(",");
+  const calls = [];
+  if (ids.length) calls.push(patch(`mail_id=in.(${list})`, "pending"));
+  calls.push(patch(`received_label=lt.${encodeURIComponent(since)}${ids.length ? `&mail_id=not.in.(${list})` : ""}&or=(kroll_state.is.null,kroll_state.eq.pending)`, "processed"));
+  calls.push(patch(`received_label=gte.${encodeURIComponent(since)}${ids.length ? `&mail_id=not.in.(${list})` : ""}&or=(kroll_state.is.null,kroll_state.eq.pending)`, "processed"));
+  const results = await Promise.all(calls);
+  return send(res, results.every((r) => r.ok) ? 200 : 502, { ok: results.every((r) => r.ok), pending: ids.length });
+}
+
 export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
@@ -173,6 +196,7 @@ export default async function handler(req, res) {
   if (typeof body === "string") {
     try { body = JSON.parse(body); } catch { return send(res, 400, { error: "Invalid JSON" }); }
   }
+  if (body?.type === "kroll_pending") return handleKrollPending(body, res, supabaseConfig());
   if (body?.type === "fax_result") return handleFaxResult(body, res, supabaseConfig());
   const mailId = Number(body?.mail_id);
   if (!Number.isSafeInteger(mailId) || mailId <= 0) return send(res, 400, { error: "mail_id required" });
