@@ -1366,53 +1366,100 @@ class KrollDB:
         self.__dict__["_doc_contact"] = found
         return found
 
+    _CATS = [("tab", r"\btab(let)?s?\b|\bcaplets?\b"), ("cap", r"\bcap(sule)?s?\b"),
+             ("liq", r"solution|suspension|syrup|elixir|liquid|\bsol(n)?\b|\bsusp\b|\bliq\b"),
+             ("top", r"cream|ointment|\bgel\b|lotion|\bpatch\b|\bcrm\b|\boint\b|\bpch\b"),
+             ("spray", r"spray"), ("inh", r"inhal|puff|diskus|turbuhaler|actuation|\bmdi\b"),
+             ("inj", r"inject|syringe|\bpen\b|vial|cartridge|\binj\b"), ("drops", r"\bdrops?\b|ophth|\botic\b"),
+             ("supp", r"supp")]
+
+    @classmethod
+    def _traits(cls, text: str) -> Dict[str, Any]:
+        t = str(text or "").lower()
+        cat = next((c for c, rx_ in cls._CATS if re.search(rx_, t)), None)
+        return {"er": bool(re.search(r"extended|prolonged|long[- ]acting|\b(er|xr|sr|cr|la|xl|mr|cd)\b|24[- ]?h(ou)?rs?", t)),
+                "dr": bool(re.search(r"delayed|enteric|\b(dr|ec)\b", t)), "cat": cat}
+
+    @staticmethod
+    def _nums(text: str) -> set:
+        return set(re.findall(r"(?<![\d.])(\d+(?:\.\d+)?)(?![\d])", str(text or "")))
+
     def search_drugs(self, drug_name: str, strength: str = "") -> List[Dict[str, Any]]:
-        """Kroll drugs matching name + strength, most-dispensed first. Empty list if unavailable."""
+        """The Kroll products that ARE the drug on the fax: same ingredient(s), same strength, same form (tablet / capsule /
+        extended release ...), no combination products when the fax names one drug. Active products only. Each result has
+        `level` 1 (everything fits), 2 (form not checked) or 3 (loose); the best non-empty level is returned, most-dispensed first."""
         ds = self._resolve_drug_schema()
         if not ds or not ds["drug_name"]:
             return []
         words = [w for w in re.split(r"[^a-z]+", (drug_name or "").lower()) if len(w) > 3 and w not in self._NOISE]
         words = [w for w in words if w not in self._MAKERS] or words
+        words = [w for w in words if not self._traits(w)["cat"] and w not in ("hours", "hour", "tablet", "capsule")] or words
         if not words:
             return []
         words.sort(key=len, reverse=True)     # the longest word is nearly always the drug itself
-        num = re.search(r"(\d+(?:\.\d+)?)\s*(mg|mcg|ug|g|ml|iu|%)", f"{strength} {drug_name}".lower())
+        fax_text = f"{drug_name} {strength}".lower()
+        fax_nums = self._nums(re.sub(r"\b\d+\s*(?:hours?|hrs?|h)\b", " ", fax_text))
+        fax_traits = self._traits(fax_text)
+        fax_parts = [x for x in re.split(r"/|\+|\band\b|\bwith\b", (drug_name or "").lower()) if re.search(r"[a-z]{4}", x)] or [""]
+        cols = self.columns(ds["drug_table"])
+        sel = [f"[{ds['drug_id']}]", f"[{ds['drug_din']}]", f"[{ds['drug_name']}]",
+               f"[{ds['drug_name2']}]" if ds.get("drug_name2") else "NULL",
+               f"[{ds['drug_strength']}]" if ds.get("drug_strength") else "NULL",
+               f"[{cols['FORM']}]" if "FORM" in cols else "NULL", f"[{cols['MANUFACTURER']}]" if "MANUFACTURER" in cols else "NULL"]
         nc = [ds["drug_name"]] + ([ds["drug_name2"]] if ds.get("drug_name2") else [])
         name_cond = "(" + " OR ".join(f"[{c}] LIKE ?" for c in nc) + ")"
-        full = "COALESCE(NULLIF([%s], ''), [%s])" % (nc[-1], nc[0]) if len(nc) > 1 else f"[{nc[0]}]"
-        scol = ds.get("drug_strength") or ""
-        found: List[Dict[str, Any]] = []
+        rows: List[Tuple[Any, ...]] = []
         try:
             cur = self.ensure().cursor()
             try:
                 act = self.active_clause(ds["drug_table"])
                 for use_active in ((True, False) if act else (False,)):   # active products first; all only if none
-                  for word in words[:3]:                  # try the longest word first, then the next ones
-                    sql = (f"SELECT TOP 200 [{ds['drug_id']}], [{ds['drug_din']}], {full}, "
-                           f"{'[' + scol + ']' if scol else 'NULL'} FROM {ds['drug_table']} WITH (NOLOCK) "
-                           f"WHERE {name_cond} AND [{ds['drug_din']}] IS NOT NULL" + (act if use_active else ""))
-                    params: List[Any] = [f"%{word}%"] * len(nc)
-                    if num and scol:
-                        sql += f" AND [{scol}] LIKE ?"
-                        params.append(f"%{num.group(1)}%")
-                    cur.execute(sql, params)
-                    for drg_id, din, name, strg in cur.fetchall():
-                        d = self._din8(din)
-                        if not d:
-                            continue
-                        if num:     # the exact number, not just a longer one (4 must not match 40)
-                            if not re.search(r"(?<![\d.])" + re.escape(num.group(1)) + r"(?![\d])", f"{strg or ''} {name or ''}"):
-                                continue
-                        label = " ".join(x for x in (str(name or "").strip(), str(strg or "").strip()) if x)
-                        found.append({"drug_id": drg_id, "din": d, "name": label, "uses": 0})
-                    if found:
+                    for word in words[:2]:
+                        cur.execute(f"SELECT TOP 500 {', '.join(sel)} FROM {ds['drug_table']} WITH (NOLOCK) "
+                                    f"WHERE {name_cond} AND [{ds['drug_din']}] IS NOT NULL" + (act if use_active else ""),
+                                    [f"%{word}%"] * len(nc))
+                        rows = list(cur.fetchall())
+                        if rows:
+                            break
+                    if rows:
                         break
-                  if found:
-                    break
             finally:
                 cur.close()
         except Exception as exc:
             self.log.debug("search_drugs failed: %s", exc)
+            return []
+        levels: Dict[int, List[Dict[str, Any]]] = {1: [], 2: [], 3: []}
+        for drg_id, din, brand, gen, strg, form, mfr in rows:
+            d = self._din8(din)
+            if not d:
+                continue
+            brand_s, gen_s = str(brand or "").lower(), str(gen or "").lower()
+            both = f"{brand_s} {gen_s}"
+            if not words[0] in both:
+                continue
+            all_words = all(w in both for w in words)
+            cand_nums = self._nums(strg) or self._nums(both)
+            if fax_nums and not (fax_nums <= cand_nums and len(cand_nums) <= len(fax_nums) + 1):
+                continue                                   # strength must be the same number (4 is not 40, 5/325 is not 325)
+            cparts = [x for x in re.split(r"/|\+|\band\b", gen_s) if re.search(r"[a-z]{4}", x)] or [""]
+            generic_named = all(w in gen_s for w in words)
+            combo = generic_named and len(cparts) > max(1, len(fax_parts))
+            ct = self._traits(f"{form or ''} {both}")
+            form_ok = not ((fax_traits["er"] != ct["er"]) or (fax_traits["dr"] != ct["dr"])
+                           or (fax_traits["cat"] and ct["cat"] and fax_traits["cat"] != ct["cat"]))
+            label = " ".join(x for x in (str(brand or gen or "").strip(), str(strg or "").strip(), str(form or "").strip()) if x)
+            item = {"drug_id": drg_id, "din": d, "name": label, "uses": 0, "manufacturer": str(mfr or "").strip()}
+            if all_words and not combo and form_ok:
+                levels[1].append(item)
+            elif not combo and (all_words or words[0] in gen_s or words[0] in brand_s):
+                levels[2].append(item)
+            else:
+                levels[3].append(item)
+        for lv in (1, 2, 3):
+            if levels[lv]:
+                found = [dict(x, level=lv) for x in levels[lv]]
+                break
+        else:
             return []
         # Rank by how often this pharmacy dispenses each product (last 12 months when a date column is known).
         r = self.cfg.rx_schema
@@ -1421,7 +1468,7 @@ class KrollDB:
             try:
                 cur = self.ensure().cursor()
                 try:
-                    for item in found[:25]:
+                    for item in found[:40]:
                         cur.execute(f"SELECT COUNT(*) FROM {r['rx_table']} WITH (NOLOCK) WHERE [{r['rx_drug_id']}] = ?{when}",
                                     (item["drug_id"],))
                         item["uses"] = int(cur.fetchone()[0])
@@ -1430,7 +1477,7 @@ class KrollDB:
             except Exception as exc:
                 self.log.debug("dispense ranking skipped: %s", exc)
         found.sort(key=lambda x: (-x["uses"], x["name"]))
-        return found[:5]
+        return found[:8]
 
     def attach_image(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """Load the fax image for this pending row (ScriptImageId) as a JPEG data URL. Never raises."""
@@ -3221,23 +3268,29 @@ def _enrich_drug(db: "KrollDB", cur, med: Dict[str, Any], kp: Dict[str, Any]) ->
     out_c = []
     for c in cands[:5]:
         h = hist.get(c["drug_id"])
-        out_c.append({"din": c["din"], "name": c["name"], "uses": c.get("uses", 0), "in_history": bool(h)})
+        out_c.append({"din": c["din"], "name": c["name"], "uses": c.get("uses", 0), "in_history": bool(h), "exact": c.get("level", 1) == 1})
     fax_din = re.sub(r"\D", "", str(med.get("din") or ""))
+    in_kroll = any(c["din"].lstrip("0") == fax_din.lstrip("0") for c in out_c) if fax_din else False
     pick, reason = None, ""
-    in_hist = [c for c in out_c if c["in_history"]]
-    if fax_din and any(c["din"].lstrip("0") == fax_din.lstrip("0") for c in out_c):
+    exact = [c for c, raw in zip(out_c, cands[:8]) if raw.get("level", 1) == 1]
+    in_hist = [c for c in exact if c["in_history"]]
+    strength_known = bool(re.search(r"\d", f"{med.get('strength') or ''} {med.get('drug_name') or ''}"))
+    if in_kroll:
         pick, reason = next(c["din"] for c in out_c if c["din"].lstrip("0") == fax_din.lstrip("0")), "DIN on the fax is a Kroll product"
-    elif len(out_c) == 1:
-        pick, reason = out_c[0]["din"], "only matching product in Kroll"
+    elif len(exact) == 1:
+        pick, reason = exact[0]["din"], "the only Kroll product with this name, strength and form"
     elif len(in_hist) == 1:
         pick, reason = in_hist[0]["din"], "this patient got this product before"
     elif len(in_hist) > 1:
         recent = next(iter(hist))
         pick, reason = next(c["din"] for c in cands if c["drug_id"] == recent), "the product this patient got most recently"
-    elif len(out_c) > 1 and out_c[0]["uses"] >= 3 and out_c[0]["uses"] >= 3 * max(out_c[1]["uses"], 1):
-        pick, reason = out_c[0]["din"], f"the product this pharmacy dispenses most ({out_c[0]['uses']} in 12 months)"
-    drug = {"candidates": out_c, "pick": pick, "reason": reason}
-    fill_din = pick if (pick and not fax_din) else ""
+    elif len(exact) > 1 and strength_known and exact[0]["uses"] >= 1 and exact[0]["uses"] > exact[1]["uses"]:
+        pick, reason = exact[0]["din"], f"same name, strength and form; the one this pharmacy dispenses most ({exact[0]['uses']} in 12 months)"
+    elif len(out_c) == 1 and cands[0].get("level", 3) <= 2:
+        pick, reason = out_c[0]["din"], "only matching product in Kroll (form not confirmed)"
+    drug = {"candidates": out_c, "pick": pick, "reason": reason, "replaces": fax_din if (pick and fax_din and not in_kroll) else ""}
+    # The DIN on a fax is often misread or invented: Kroll's exact product wins unless the fax DIN IS a Kroll product.
+    fill_din = pick if (pick and not in_kroll) else ""
     if hist:
         best = next(iter(hist.values()))
         last_rx = {"din": next((c["din"] for c in cands if c["drug_id"] == best.get("rx_drug_id")), ""),

@@ -28,8 +28,8 @@ interface FaxRow {
   kroll_patient?: { status: "exact" | "corrected" | "ambiguous" | "none"; first: string; last: string; score: number; n_dob: number; dob_swapped: boolean; dob?: string; matched_by?: "dob" | "name" | "address" | "name+address"; tie_broken?: boolean; candidates?: Array<{ first: string; last: string; score: number }> } | null;
   kroll_enrich?: {
     doctor?: { status: "found" | "by_name" | "by_address" | "several" | "none"; first: string; last: string; licence: string; name_ok: boolean | null };
-    meds?: Array<{ drug: { candidates: Array<{ din: string; name: string; uses: number; in_history: boolean }>; pick: string | null; reason: string }; last_rx: { din: string; sig: string; qty: number | null; refills: number | null; filled: string } | null; din_fill: string }>;
-    drug?: { candidates: Array<{ din: string; name: string; uses: number; in_history: boolean }>; pick: string | null; reason: string };
+    meds?: Array<{ drug: { candidates: Array<{ din: string; name: string; uses: number; in_history: boolean }>; pick: string | null; reason: string; replaces?: string }; last_rx: { din: string; sig: string; qty: number | null; refills: number | null; filled: string } | null; din_fill: string }>;
+    drug?: { candidates: Array<{ din: string; name: string; uses: number; in_history: boolean }>; pick: string | null; reason: string; replaces?: string };
     last_rx?: { din: string; sig: string; qty: number | null; refills: number | null; filled: string } | null;
     fills?: { licence?: string; din?: string; doctor_name?: string };
   } | null;
@@ -183,7 +183,7 @@ export default function Intake() {
       const faxName = s?.patient?.full_name || "UNKNOWN PATIENT";
       const en = fax.kroll_enrich;
       const faxDin = (m?.din || "").replace(/\D/g, "");
-      const fillDin = !faxDin && en?.fills?.din ? en.fills.din : "";
+      const fillDin = en?.fills?.din && en.fills.din !== faxDin ? en.fills.din : "";
       const fillLic = !s?.prescriber?.license_number && en?.fills?.licence ? en.fills.licence : "";
       const fillDoc = en?.fills?.doctor_name || "";
       const lr = en?.last_rx;
@@ -195,26 +195,26 @@ export default function Intake() {
         prescriber_name: fillDoc || s?.prescriber?.name || "",
         license_number: s?.prescriber?.license_number || fillLic,
         drug_name: m?.drug_name || "",
-        din: m?.din || fillDin,
+        din: fillDin || m?.din || "",
         extra_meds: (s?.medications ?? []).slice(1).map((mx, i) => {
           const em = en?.meds?.[i + 1];
           const dinX = (mx?.din || "").replace(/\D/g, "");
-          const fillX = !dinX && em?.din_fill ? em.din_fill : "";
+          const fillX = em?.din_fill && em.din_fill !== dinX ? em.din_fill : "";
           return {
             drug_name: mx?.drug_name || "",
-            din: mx?.din || fillX,
+            din: fillX || mx?.din || "",
             strength: mx?.strength || "",
             quantity: Number(mx?.quantity) || 0,
             refills: Number(mx?.refills) || 0,
             sig: mx?.sig || "",
             is_compound: Boolean(mx?.is_compound),
-            ...(em?.drug?.candidates?.length && !dinX ? {
+            ...(em?.drug?.candidates?.length && (!dinX || fillX) ? {
               din_source: fillX ? "kroll_unique_match" : "kroll_candidates",
               din_candidates: em.drug.candidates.map((c) => ({ din: c.din, brand: c.name, company: "", strength: mx?.strength || "", form: "", uses: c.uses })),
             } : {}),
           };
         }),
-        ...(en?.drug?.candidates?.length && !faxDin ? {
+        ...(en?.drug?.candidates?.length && (!faxDin || fillDin) ? {
           din_source: fillDin ? "kroll_unique_match" : "kroll_candidates",
           din_candidates: en.drug.candidates.map((c) => ({ din: c.din, brand: c.name, company: "", strength: m?.strength || "", form: "", uses: c.uses })),
         } : {}),
@@ -238,7 +238,7 @@ export default function Intake() {
           ...(useKroll && s?.patient?.dob && kp.dob && kp.matched_by !== "dob" && kp.dob !== s.patient.dob ? [`Date of birth on the fax (${s.patient.dob}) differs from Kroll (${kp.dob}) - check the patient`] : []),
           ...(fillDoc ? [`Doctor name on the fax ("${s?.prescriber?.name}") replaced by Kroll's "${fillDoc}", found by the clinic's phone / fax / address - check it`] : []),
           ...(fillLic ? [`Licence ${fillLic} filled in from Kroll (Dr ${dr?.first} ${dr?.last}, found by name) - the fax had none`] : []),
-          ...(fillDin ? [`DIN ${fillDin} filled in from Kroll (${en?.drug?.reason}) - check it is the product you want`] : []),
+          ...(fillDin ? [`DIN ${fillDin} taken from Kroll (${en?.drug?.reason})${faxDin ? `; replaces ${faxDin} read from the fax, which is not a Kroll product` : ""} - check it is the product you want`] : []),
           ...(dr?.status === "found" && dr.name_ok === false ? [`Licence on the fax belongs to Dr ${dr.first} ${dr.last} in Kroll, but the fax says "${s?.prescriber?.name}" - check the doctor`] : []),
           ...(dr?.status === "by_name" && dr.licence && s?.prescriber?.license_number && dr.licence.replace(/\W/g, "") !== s.prescriber.license_number.replace(/\W/g, "") ? [`Kroll has licence ${dr.licence} for Dr ${dr.first} ${dr.last}; the fax says ${s.prescriber.license_number} - check which is right`] : []),
           ...(dr?.status === "several" ? [`Several doctors in Kroll match "${s?.prescriber?.name}" and the licence is missing - pick the doctor in Kroll`] : []),
@@ -246,8 +246,9 @@ export default function Intake() {
           ...(lr ? [`Kroll's last Rx of this drug${lr.filled ? ` (${lr.filled})` : ""}: sig "${lr.sig ?? "?"}", qty ${lr.qty ?? "?"}, refills ${lr.refills ?? "?"}${m?.quantity && lr.qty != null && Number(lr.qty) !== Number(m.quantity) ? " - quantity differs from the fax" : ""}`] : []),
           ...((s?.medications ?? []).slice(1).flatMap((mx, i) => {
             const em = en?.meds?.[i + 1];
+            const dinX0 = (mx?.din || "").replace(/\D/g, "") !== em?.din_fill ? (mx?.din || "").replace(/\D/g, "") : "";
             const out: string[] = [];
-            if (em?.din_fill) out.push(`${mx?.drug_name}: DIN ${em.din_fill} filled in from Kroll (${em.drug.reason}) - check it`);
+            if (em?.din_fill) out.push(`${mx?.drug_name}: DIN ${em.din_fill} taken from Kroll (${em.drug.reason})${dinX0 ? `; replaces ${dinX0} read from the fax` : ""} - check it`);
             else if (em && em.drug.candidates.length > 1 && !(mx?.din || "")) out.push(`${mx?.drug_name}: ${em.drug.candidates.length} Kroll products match - staff pick the DIN`);
             if (em?.last_rx) out.push(`${mx?.drug_name}: Kroll's last Rx${em.last_rx.filled ? ` (${em.last_rx.filled})` : ""} was sig "${em.last_rx.sig ?? "?"}", qty ${em.last_rx.qty ?? "?"}, refills ${em.last_rx.refills ?? "?"}`);
             return out;
@@ -295,7 +296,8 @@ export default function Intake() {
       if (en.fills?.licence && !existing.prescriber.license_number) updatePrescriber(existing.id, { license_number: en.fills.licence });
       existing.medications.forEach((med, i) => {
         const f = en.meds?.[i]?.din_fill || (i === 0 ? en.fills?.din : "");
-        if (f && !med.din) updateMedication(existing.id, med.id, { din: f });
+        const rep = en.meds?.[i]?.drug?.replaces || "";
+        if (f && (!med.din || (rep && med.din.replace(/\D/g, "") === rep))) updateMedication(existing.id, med.id, { din: f });
       });
     });
     rows.filter((f) => f.is_prescription !== false).forEach((fax) => {

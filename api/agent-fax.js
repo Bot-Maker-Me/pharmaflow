@@ -239,15 +239,15 @@ async function handleKrollEnrich(body, res, cfg) {
     din: str(c.din, 12), name: str(c.name, 80), uses: Number(c.uses) || 0, in_history: Boolean(c.in_history),
   }));
   const cleanDrug = (dr) => ({
-    candidates: (Array.isArray(dr?.candidates) ? dr.candidates : []).slice(0, 5).map((c) => ({ din: str(c.din, 12), name: str(c.name, 80), uses: Number(c.uses) || 0, in_history: Boolean(c.in_history) })),
-    pick: dr?.pick ? str(dr.pick, 12) : null, reason: str(dr?.reason, 80),
+    candidates: (Array.isArray(dr?.candidates) ? dr.candidates : []).slice(0, 5).map((c) => ({ din: str(c.din, 12), name: str(c.name, 80), uses: Number(c.uses) || 0, in_history: Boolean(c.in_history), exact: c.exact !== false })),
+    pick: dr?.pick ? str(dr.pick, 12) : null, reason: str(dr?.reason, 120), replaces: str(dr?.replaces, 12),
   });
   const cleanLast = (l) => (l ? { din: str(l.din, 12), sig: str(l.sig, 300), qty: l.qty ?? null, refills: l.refills ?? null, filled: str(l.filled, 10) } : null);
   const clean = {
     meds: (Array.isArray(e.meds) ? e.meds : []).slice(0, 12).map((m) => ({ drug: cleanDrug(m?.drug), last_rx: cleanLast(m?.last_rx), din_fill: m?.din_fill ? str(m.din_fill, 12) : "" })),
     doctor: { status: ["found", "by_name", "by_address", "several", "none"].includes(d.status) ? d.status : "none", first: str(d.first, 40), last: str(d.last, 40),
               licence: str(d.licence, 20), name_ok: d.name_ok === true ? true : d.name_ok === false ? false : null },
-    drug: { candidates: cands, pick: e.drug?.pick ? str(e.drug.pick, 12) : null, reason: str(e.drug?.reason, 80) },
+    drug: cleanDrug(e.drug),
     last_rx: e.last_rx ? { din: str(e.last_rx.din, 12), sig: str(e.last_rx.sig, 300), qty: e.last_rx.qty ?? null, refills: e.last_rx.refills ?? null, filled: str(e.last_rx.filled, 10) } : null,
     fills: { ...(e.fills?.licence ? { licence: str(e.fills.licence, 20) } : {}), ...(e.fills?.din ? { din: str(e.fills.din, 12) } : {}), ...(e.fills?.doctor_name ? { doctor_name: str(e.fills.doctor_name, 80) } : {}) },
   };
