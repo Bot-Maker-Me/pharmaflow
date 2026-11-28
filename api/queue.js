@@ -122,12 +122,21 @@ export default async function handler(req, res) {
         // ?status=new (default) | pushed | dismissed
         const fstatus = ["new", "pushed", "dismissed"].includes(q.get("status")) ? q.get("status") : "new";
         const fr = await fetch(
-          `${url.replace(/\/$/, "")}/rest/v1/inbound_faxes?select=mail_id,store_id,received_label,from_label,doc_type,summary,ocr,page_image_url,status,pushed_at,learn_result,created_at&is_prescription=eq.true&status=eq.${fstatus}&order=created_at.desc&limit=60`,
+          `${url.replace(/\/$/, "")}/rest/v1/inbound_faxes?select=mail_id,store_id,received_label,from_label,doc_type,summary,ocr,page_image_url,status,pushed_at,learn_result,created_at&is_prescription=eq.true&status=eq.${fstatus}&order=created_at.desc&limit=300`,
           { headers },
         );
         if (!fr.ok) return send(res, 500, { error: "Query failed" });
-        const faxes = await signImages(await fr.json(), url, key);
-        return send(res, 200, { ok: true, count: faxes.length, rows: faxes });
+        // Newest FAX first: sort by the time Kroll shows on the fax (YYYY-MM-DD HH:MM:SS sorts as text), not by the time
+        // the agent uploaded it (a backlog upload would otherwise put old faxes on top).
+        const all = (await fr.json()).sort((a, b) => {
+          const ka = a.received_label || "", kb = b.received_label || "";
+          return ka === kb ? Date.parse(b.created_at) - Date.parse(a.created_at) : ka < kb ? 1 : -1;
+        });
+        const today = new Intl.DateTimeFormat("en-CA", { timeZone: PHARMACY_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+        const wanted = q.get("day") === "today" ? all.filter((r) => (r.received_label || "").startsWith(today)) : all;
+        const faxes = await signImages(wanted.slice(0, 60), url, key);
+        const todayCount = all.filter((r) => (r.received_label || "").startsWith(today)).length;
+        return send(res, 200, { ok: true, count: faxes.length, total: all.length, today_count: todayCount, today, rows: faxes });
       }
       const status = q.get("status") || "received";
       if (!STATUSES.includes(status)) return send(res, 400, { error: "Invalid status" });

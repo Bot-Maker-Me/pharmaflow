@@ -83,6 +83,8 @@ export default function Intake() {
   const [tab, setTab] = React.useState<Tab>("new");
   const [rows, setRows] = React.useState<FaxRow[]>([]);
   const [newCount, setNewCount] = React.useState<number | null>(null);
+  const [todayCount, setTodayCount] = React.useState<number | null>(null);
+  const [day, setDay] = React.useState<"today" | "all">("today");
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState<number | null>(null);
   const [stats, setStats] = React.useState<FaxStats | null>(null);
@@ -102,18 +104,27 @@ export default function Intake() {
     }
     try {
       const [shown, waiting, statsRes] = await Promise.all([
-        fetch(`${base}/api/queue?kind=faxes&status=${tab}`, { headers }),
-        tab === "new" ? Promise.resolve(null) : fetch(`${base}/api/queue?kind=faxes&status=new`, { headers }),
+        fetch(`${base}/api/queue?kind=faxes&status=${tab}&day=${tab === "new" ? day : "all"}`, { headers }),
+        tab === "new" && day === "all" ? Promise.resolve(null) : fetch(`${base}/api/queue?kind=faxes&status=new&day=all`, { headers }),
         fetch(`${base}/api/queue?kind=fax_stats`, { headers }),
       ]);
       if (shown.status === 401) throw new Error("Wrong access token (Settings)");
       if (!shown.ok) throw new Error(`Server returned ${shown.status}`);
-      const data = (await shown.json()) as { rows: FaxRow[] };
+      const data = (await shown.json()) as { rows: FaxRow[]; total?: number; today_count?: number };
       setRows(data.rows);
+      if (tab === "new") {
+        setTodayCount(data.today_count ?? null);
+        if (day === "all") setNewCount(data.total ?? data.rows.length);
+      }
       if (statsRes.ok) setStats((await statsRes.json()) as FaxStats);
-      const newRows = tab === "new" ? data.rows : waiting?.ok ? ((await waiting.json()) as { rows: FaxRow[] }).rows : null;
+      let newRows: FaxRow[] | null = null;
+      if (waiting?.ok) {
+        const w = (await waiting.json()) as { rows: FaxRow[]; total?: number; today_count?: number };
+        newRows = w.rows;
+        setNewCount(w.total ?? w.rows.length);
+        setTodayCount(w.today_count ?? null);
+      } else if (tab === "new") newRows = data.rows;
       if (newRows) {
-        setNewCount(newRows.length);
         // A fax that was not in the list before = a new fax arrived: flash it, beep and tell the user.
         const known = knownNew.current;
         const arrived = known ? newRows.filter((f) => !known.has(f.mail_id)) : [];
@@ -130,7 +141,7 @@ export default function Intake() {
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [base, headers, settings.apiToken, tab]);
+  }, [base, headers, settings.apiToken, tab, day]);
 
   React.useEffect(() => {
     void load();
@@ -231,8 +242,11 @@ export default function Intake() {
 
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex gap-2">
-          <Button size="sm" variant={tab === "new" ? "default" : "outline"} onClick={() => setTab("new")}>
-            To do{newCount != null ? ` (${newCount})` : ""}
+          <Button size="sm" variant={tab === "new" && day === "today" ? "default" : "outline"} onClick={() => { setTab("new"); setDay("today"); }}>
+            Today{todayCount != null ? ` (${todayCount})` : ""}
+          </Button>
+          <Button size="sm" variant={tab === "new" && day === "all" ? "default" : "outline"} onClick={() => { setTab("new"); setDay("all"); }}>
+            All to do{newCount != null ? ` (${newCount})` : ""}
           </Button>
           <Button size="sm" variant={tab === "pushed" ? "default" : "outline"} onClick={() => setTab("pushed")}>
             Pushed to Kroll
@@ -295,7 +309,7 @@ export default function Intake() {
         })}
         {rows.length === 0 && (
           <li className="p-10 text-center text-sm text-muted-foreground">
-            {tab === "new" ? "No new prescription faxes. They appear here by themselves." : "Nothing pushed yet."}
+            {tab === "new" ? (day === "today" ? "No prescription faxes today yet. Older ones are under All to do." : "No new prescription faxes. They appear here by themselves.") : "Nothing pushed yet."}
           </li>
         )}
       </ul>
