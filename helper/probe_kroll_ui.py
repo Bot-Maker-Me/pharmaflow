@@ -11,8 +11,8 @@ import sys
 from pywinauto import Desktop
 
 CAPTION_TYPES = {"Button", "MenuItem", "TabItem", "MenuBar", "ToolBar", "Hyperlink", "CheckBox", "RadioButton"}
-MAX_DEPTH = 7
-MAX_KIDS = 40
+MAX_DEPTH = 16
+MAX_KIDS = 60
 
 
 def dump(ctrl, out, depth=0):
@@ -52,7 +52,7 @@ def kroll_windows():
 
 def main():
     out = []
-    for label in ("INBOUND DOCS list (click the Inbound Docs tile)",
+    for label in ("INBOUND DOCS LIST: click the Inbound Docs tile so the fax list is on screen, one fax selected",
                   "SORT PAGES window (select a fax, press F2)",
                   "RX DROPOFF FORM (after choosing 'Use to process prescription(s)' and Process)"):
         input(f"\nOpen Kroll on: {label}\nThen press Enter here... ")
