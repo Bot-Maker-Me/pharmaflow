@@ -293,10 +293,36 @@ export default function Intake() {
                     <p className="mt-0.5 text-sm text-muted-foreground">{fax.summary || "Not a new prescription. Open it in Kroll's Inbound Docs."}</p>
                   </>
                 ) : (<>
-                <p className="text-[15px] font-bold">
-                  {s?.patient?.full_name || "Patient not readable"}
-                  {s?.patient?.dob ? <span className="ml-2 font-data text-xs font-normal text-muted-foreground">{s.patient.dob}</span> : null}
-                </p>
+                {(() => {
+                  const kp = fax.kroll_patient;
+                  const matched = kp && (kp.status === "exact" || kp.status === "corrected") && kp.last;
+                  return (
+                    <>
+                      <p className="text-[15px] font-bold">
+                        {matched ? `${kp.first} ${kp.last}` : s?.patient?.full_name || "Patient not readable"}
+                        {s?.patient?.dob ? <span className="ml-2 font-data text-xs font-normal text-muted-foreground">{s.patient.dob}</span> : null}
+                        {matched ? (
+                          <Badge variant={kp.status === "corrected" ? "warning" : "outline"} className="ml-2 align-middle" title="Name taken from Kroll, found by date of birth">
+                            {kp.status === "corrected" ? "Kroll name · matched by DOB" : "In Kroll"}
+                          </Badge>
+                        ) : null}
+                        {kp?.status === "ambiguous" ? (
+                          <Badge variant="warning" className="ml-2 align-middle" title="Several Kroll patients share this date of birth">
+                            {kp.n_dob} in Kroll with this DOB
+                          </Badge>
+                        ) : null}
+                        {kp?.status === "none" ? (
+                          <Badge variant="warning" className="ml-2 align-middle" title="No patient in Kroll has this date of birth">
+                            Not found in Kroll
+                          </Badge>
+                        ) : null}
+                      </p>
+                      {matched && kp.status === "corrected" && s?.patient?.full_name ? (
+                        <p className="font-data text-[11px] text-muted-foreground">Fax says: {s.patient.full_name}</p>
+                      ) : null}
+                    </>
+                  );
+                })()}
                 <p className="mt-0.5 text-sm">
                   {[m?.drug_name, m?.strength].filter(Boolean).join(" ") || "Drug not readable"}
                   <span className="text-muted-foreground"> · qty {m?.quantity ?? "?"} · refills {m?.refills ?? "?"}</span>
