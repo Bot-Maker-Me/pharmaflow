@@ -2780,6 +2780,18 @@ def name_score(fax_name: str, first: str, last: str) -> float:
     return round(max(seq, cover), 3)
 
 
+def _name_parts_score(fax_name: str, first: str, last: str) -> float:
+    """Tie-breaker: how exactly the whole Kroll name appears in the fax name (extra middle names on the fax are fine)."""
+    import difflib
+    toks = _name_key(fax_name).split()
+    f, l = _name_key(first), _name_key(last)
+    if not toks or not l:
+        return 0.0
+    lb = max(difflib.SequenceMatcher(None, l, t).ratio() for t in toks)
+    fb = max((difflib.SequenceMatcher(None, f, t).ratio() for t in toks), default=0.0) if f else 0.5
+    return round(0.6 * lb + 0.4 * fb, 3)
+
+
 def resolve_patient(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
     """Find the REAL Kroll patient for a fax when the name on it may be misspelt: everyone with that date of birth,
     best name fit wins. status: exact | corrected | ambiguous | none. Read-only. Never raises."""
@@ -2806,8 +2818,32 @@ def resolve_patient(db: "KrollDB", script: Dict[str, Any]) -> Dict[str, Any]:
                 scored = sorted(((name_score(fax_name, str(r[1] or ""), str(r[2] or "")), r) for r in rows), key=lambda x: -x[0])
                 best, row = scored[0]
                 second = scored[1][0] if len(scored) > 1 else 0.0
-                out.update({"n_dob": len(rows), "dob_swapped": swapped, "score": best,
-                            "pat_id": row[0], "first": str(row[1] or "").strip().title(), "last": str(row[2] or "").strip().title()})
+                tie_broken = False
+                if len(scored) > 1 and best - second < 0.05 and best >= 0.85:
+                    # Several patients fit equally: prefer the one whose WHOLE name is on the fax, then the one the
+                    # pharmacy has actually been dispensing for (duplicate / old records have no recent Rx).
+                    tied = [x for x in scored if best - x[0] < 0.05]
+                    tied.sort(key=lambda x: -_name_parts_score(fax_name, str(x[1][1] or ""), str(x[1][2] or "")))
+                    top, nxt = tied[0], tied[1]
+                    if _name_parts_score(fax_name, str(top[1][1] or ""), str(top[1][2] or "")) - \
+                            _name_parts_score(fax_name, str(nxt[1][1] or ""), str(nxt[1][2] or "")) >= 0.1:
+                        row, best, second, tie_broken = top[1], top[0], 0.0, True
+                    else:
+                        r = db.cfg.rx_schema
+                        if r.get("rx_table") and r.get("rx_pat_id"):
+                            counts = []
+                            for sc, cand in tied[:4]:
+                                cur.execute(f"SELECT COUNT(*) FROM {r['rx_table']} WITH (NOLOCK) WHERE [{r['rx_pat_id']}] = ?"
+                                            + (f" AND [{r['rx_created']}] >= DATEADD(month, -18, GETDATE())" if r.get("rx_created") else ""),
+                                            (cand[0],))
+                                counts.append((int(cur.fetchone()[0]), sc, cand))
+                            counts.sort(key=lambda x: -x[0])
+                            if counts[0][0] > 0 and counts[0][0] >= 2 * max(counts[1][0], 1) - 1 and counts[0][0] > counts[1][0]:
+                                row, best, second, tie_broken = counts[0][2], counts[0][1], 0.0, True
+                out.update({"n_dob": len(rows), "dob_swapped": swapped, "score": best, "tie_broken": tie_broken,
+                            "pat_id": row[0], "first": str(row[1] or "").strip().title(), "last": str(row[2] or "").strip().title(),
+                            "candidates": [{"first": str(x[1][1] or "").strip().title(), "last": str(x[1][2] or "").strip().title(),
+                                            "score": x[0]} for x in scored[:3]]})
                 if swapped and best < 0.6:                # a swapped date needs a clearly matching name
                     out.update({"status": "none", "pat_id": None, "first": "", "last": ""})
                     continue

@@ -25,7 +25,7 @@ interface FaxRow {
   received_label: string | null;
   from_label: string | null;
   is_prescription?: boolean;
-  kroll_patient?: { status: "exact" | "corrected" | "ambiguous" | "none"; first: string; last: string; score: number; n_dob: number; dob_swapped: boolean } | null;
+  kroll_patient?: { status: "exact" | "corrected" | "ambiguous" | "none"; first: string; last: string; score: number; n_dob: number; dob_swapped: boolean; tie_broken?: boolean; candidates?: Array<{ first: string; last: string; score: number }> } | null;
   doc_type?: string | null;
   summary?: string | null;
   page_image_url: string | null;
@@ -82,7 +82,7 @@ function Counter({ label, cleared, received }: { label: string; cleared: number 
 }
 
 export default function Intake() {
-  const { settings, scripts, createManualScript, helperStatus } = useAppStore();
+  const { settings, scripts, createManualScript, helperStatus, updatePatient } = useAppStore();
   const navigate = useNavigate();
   const [tab, setTab] = React.useState<Tab>("new");
   const [rows, setRows] = React.useState<FaxRow[]>([]);
@@ -172,7 +172,7 @@ export default function Intake() {
       const s = fax.ocr?.scripts?.[0];
       const m = s?.medications?.[0];
       const kp = fax.kroll_patient;
-      const useKroll = kp && (kp.status === "exact" || kp.status === "corrected") && kp.last;
+      const useKroll = kp && (kp.status === "exact" || kp.status === "corrected" || kp.status === "ambiguous") && kp.last;
       const faxName = s?.patient?.full_name || "UNKNOWN PATIENT";
       return createManualScript({
         full_name: useKroll ? `${kp.last}, ${kp.first}` : faxName,
@@ -196,7 +196,8 @@ export default function Intake() {
         fax_from: fax.from_label ?? undefined,
         extra_flags: [
           ...(useKroll && kp.status === "corrected" ? [`Name on the fax: "${faxName}". Kroll's patient with this date of birth is "${kp.first} ${kp.last}"${kp.dob_swapped ? " (date read with day and month swapped)" : ""} - check it is the same person`] : []),
-          ...(kp?.status === "ambiguous" ? [`${kp.n_dob} Kroll patients share this date of birth and none fits the name clearly - pick the patient yourself`] : []),
+          ...(kp?.status === "ambiguous" ? [`${kp.n_dob} Kroll patients share this date of birth (${(kp.candidates ?? []).map((c) => `${c.first} ${c.last}`).join(" / ")}). Best guess used: ${kp.first} ${kp.last} - check it in Kroll's patient list`] : []),
+          ...(kp?.tie_broken ? [`Two Kroll patients fit this name and date of birth; chose ${kp.first} ${kp.last} (full name on the fax, or the one with recent prescriptions) - check it`] : []),
           ...(m?.sig_hint ? [`Staff usually change this sig to "${m.sig_hint.to}" (${m.sig_hint.hits}x) - check the dose and timing`] : []),
           ...(m?.sig_learned ? [`Sig was adjusted to match how staff usually write it - please confirm`] : []),
         ],
@@ -210,6 +211,15 @@ export default function Intake() {
   React.useEffect(() => {
     if (tab !== "new") return;
     const now = Date.now();
+    // A review screen made before the Kroll lookup finished still has the fax's name: replace it, unless staff edited it.
+    rows.forEach((fax) => {
+      const kp = fax.kroll_patient;
+      const existing = scripts.find((x) => x.faxMailId === fax.mail_id);
+      const faxName = fax.ocr?.scripts?.[0]?.patient?.full_name;
+      if (existing && kp?.last && kp.status !== "none" && existing.status === "pending" && faxName && existing.patient.full_name === faxName) {
+        updatePatient(existing.id, { full_name: `${kp.last}, ${kp.first}` });
+      }
+    });
     rows.filter((f) => f.is_prescription !== false).forEach((fax) => {
       if (!firstSeen.current.has(fax.mail_id)) firstSeen.current.set(fax.mail_id, now);
       if (scripts.some((s) => s.faxMailId === fax.mail_id)) return;
@@ -217,7 +227,7 @@ export default function Intake() {
       if (!fax.kroll_patient && now - (firstSeen.current.get(fax.mail_id) ?? now) < 90000) return;
       scriptFor(fax, true);
     });
-  }, [rows, scripts, scriptFor, tab]);
+  }, [rows, scripts, scriptFor, tab, updatePatient]);
 
   async function dismiss(fax: FaxRow) {
     if (!window.confirm("Remove this fax from the list? Use this when it is not a prescription.")) return;
@@ -295,13 +305,13 @@ export default function Intake() {
                 ) : (<>
                 {(() => {
                   const kp = fax.kroll_patient;
-                  const matched = kp && (kp.status === "exact" || kp.status === "corrected") && kp.last;
+                  const matched = kp && (kp.status === "exact" || kp.status === "corrected" || kp.status === "ambiguous") && kp.last;
                   return (
                     <>
                       <p className="text-[15px] font-bold">
                         {matched ? `${kp.first} ${kp.last}` : s?.patient?.full_name || "Patient not readable"}
                         {s?.patient?.dob ? <span className="ml-2 font-data text-xs font-normal text-muted-foreground">{s.patient.dob}</span> : null}
-                        {matched ? (
+                        {matched && kp.status !== "ambiguous" ? (
                           <Badge variant={kp.status === "corrected" ? "warning" : "outline"} className="ml-2 align-middle" title="Name taken from Kroll, found by date of birth">
                             {kp.status === "corrected" ? "Kroll name · matched by DOB" : "In Kroll"}
                           </Badge>

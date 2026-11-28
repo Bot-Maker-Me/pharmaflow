@@ -181,7 +181,8 @@ async function handleKrollPatient(body, res, cfg) {
     status: ["exact", "corrected", "ambiguous", "none"].includes(kp.status) ? kp.status : "none",
     pat_id: Number.isSafeInteger(Number(kp.pat_id)) ? Number(kp.pat_id) : null,
     first: String(kp.first || "").slice(0, 60), last: String(kp.last || "").slice(0, 60),
-    score: Number(kp.score) || 0, n_dob: Number(kp.n_dob) || 0, dob_swapped: Boolean(kp.dob_swapped),
+    score: Number(kp.score) || 0, n_dob: Number(kp.n_dob) || 0, dob_swapped: Boolean(kp.dob_swapped), tie_broken: Boolean(kp.tie_broken),
+    candidates: (Array.isArray(kp.candidates) ? kp.candidates : []).slice(0, 3).map((c) => ({ first: String(c.first || "").slice(0, 60), last: String(c.last || "").slice(0, 60), score: Number(c.score) || 0 })),
   };
   const storeId = String(body.store_id || "default").slice(0, 64);
   const upd = await fetch(`${cfg.url}/rest/v1/inbound_faxes?store_id=eq.${encodeURIComponent(storeId)}&mail_id=eq.${mailId}`, {
