@@ -1219,7 +1219,9 @@ class KrollDB:
                "sanis", "pro", "dom", "novo", "gen", "van", "zym", "bio", "mar", "nat", "pharma", "ran", "med"}
     _NOISE = {"mg", "mcg", "ml", "oral", "capsule", "capsules", "cap", "caps", "tablet", "tablets", "tab", "tabs",
               "hcl", "hydrochloride", "sodium", "potassium", "calcium", "sulfate", "sulphate", "maleate",
-              "tartrate", "besylate", "succinate", "and", "the", "of"}
+              "tartrate", "besylate", "succinate", "and", "the", "of", "actuation", "inhalation", "inhaler",
+              "puff", "dose", "extended", "release", "delayed", "film", "coated", "solution", "suspension", "cream",
+              "ointment", "drops", "injection", "powder", "disintegrating", "chewable"}
 
     @staticmethod
     def _din8(value: Any) -> str:
@@ -1248,6 +1250,8 @@ class KrollDB:
                         dinc = next((cols[c] for c in ("DIN", "DINNUM", "DINNUMBER", "DRUGDIN") if c in cols), None) \
                             or next((v for k, v in cols.items() if k.startswith("DIN")), None)
                         namec = next((cols[c] for c in ("NAME", "DRUGNAME", "DRGNAME", "DESCRIPTION", "DESCR", "BRANDNAME", "LABELNAME") if c in cols), None)
+                        if "BRANDNAME" in cols and "GENERICNAME" in cols:   # Description there = how the pill looks, not its name
+                            namec = cols["BRANDNAME"]
                         name2 = cols.get("GENERICNAME", "") if (namec or "").upper() == "BRANDNAME" else ""
                         if idc and dinc:
                             ds = {"drug_table": f"{found[0][0]}.{cand}", "drug_id": idc, "drug_din": dinc,
@@ -1309,23 +1313,31 @@ class KrollDB:
         nc = [ds["drug_name"]] + ([ds["drug_name2"]] if ds.get("drug_name2") else [])
         name_cond = "(" + " OR ".join(f"[{c}] LIKE ?" for c in nc) + ")"
         full = "COALESCE(NULLIF([%s], ''), [%s])" % (nc[-1], nc[0]) if len(nc) > 1 else f"[{nc[0]}]"
-        sql = (f"SELECT TOP 60 [{ds['drug_id']}], [{ds['drug_din']}], {full} "
-               f"FROM {ds['drug_table']} WITH (NOLOCK) WHERE {name_cond} AND [{ds['drug_din']}] IS NOT NULL")
-        params: List[Any] = [f"%{words[0]}%"] * (2 if ds.get("drug_name2") else 1)
-        if num:
-            sc = [ds["drug_name"]] + ([ds["drug_strength"]] if ds.get("drug_strength") else [])
-            sql += " AND (" + " OR ".join(f"[{c}] LIKE ? OR [{c}] LIKE ?" for c in sc) + ")"
-            for _ in sc:
-                params += [f"%{num.group(1)} {num.group(2)}%", f"%{num.group(1)}{num.group(2)}%"]
+        scol = ds.get("drug_strength") or ""
         found: List[Dict[str, Any]] = []
         try:
             cur = self.ensure().cursor()
             try:
-                cur.execute(sql, params)
-                for drg_id, din, name in cur.fetchall():
-                    d = self._din8(din)
-                    if d:
-                        found.append({"drug_id": drg_id, "din": d, "name": str(name or "").strip(), "uses": 0})
+                for word in words[:3]:                    # try the longest word first, then the next ones
+                    sql = (f"SELECT TOP 200 [{ds['drug_id']}], [{ds['drug_din']}], {full}, "
+                           f"{'[' + scol + ']' if scol else 'NULL'} FROM {ds['drug_table']} WITH (NOLOCK) "
+                           f"WHERE {name_cond} AND [{ds['drug_din']}] IS NOT NULL")
+                    params: List[Any] = [f"%{word}%"] * len(nc)
+                    if num and scol:
+                        sql += f" AND [{scol}] LIKE ?"
+                        params.append(f"%{num.group(1)}%")
+                    cur.execute(sql, params)
+                    for drg_id, din, name, strg in cur.fetchall():
+                        d = self._din8(din)
+                        if not d:
+                            continue
+                        if num:     # the exact number, not just a longer one (4 must not match 40)
+                            if not re.search(r"(?<![\d.])" + re.escape(num.group(1)) + r"(?![\d])", f"{strg or ''} {name or ''}"):
+                                continue
+                        label = " ".join(x for x in (str(name or "").strip(), str(strg or "").strip()) if x)
+                        found.append({"drug_id": drg_id, "din": d, "name": label, "uses": 0})
+                    if found:
+                        break
             finally:
                 cur.close()
         except Exception as exc:
